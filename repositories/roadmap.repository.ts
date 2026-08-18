@@ -6,12 +6,13 @@
  */
 
 import { db, schema } from "@/lib/db";
-import { eq, and, asc } from "drizzle-orm";
+import { eq, and, asc, inArray, sql } from "drizzle-orm";
 import { Logger } from "@/lib/logger";
 import {
   RoadmapDTO,
   RoadmapNodeDTO,
   StudentRoadmapProgressDTO,
+  RoadmapWithProgressSummaryDTO,
   RoadmapProgressStatus,
 } from "@/types/api.types";
 
@@ -85,6 +86,133 @@ export class RoadmapRepository {
     };
   }
 
+  /**
+   * Lists all roadmaps paired with aggregated student completion metrics (0 N+1 queries).
+   */
+  async listUserRoadmapsWithProgress(userId: number): Promise<RoadmapWithProgressSummaryDTO[]> {
+    const client = this.getDb();
+    Logger.debug("RoadmapRepository.listUserRoadmapsWithProgress", { userId });
+
+    const allRoadmaps = await this.listRoadmaps();
+    if (allRoadmaps.length === 0) return [];
+
+    const roadmapIds = allRoadmaps.map((r) => r.roadmapId);
+
+    // 1. Batch query total nodes per roadmap
+    const nodeCounts = await client
+      .select({
+        roadmapId: schema.roadmapNodes.roadmapId,
+        total: sql<number>`count(*)::int`,
+      })
+      .from(schema.roadmapNodes)
+      .where(inArray(schema.roadmapNodes.roadmapId, roadmapIds))
+      .groupBy(schema.roadmapNodes.roadmapId);
+
+    const nodeCountMap = new Map<number, number>();
+    nodeCounts.forEach((nc) => nodeCountMap.set(nc.roadmapId, nc.total));
+
+    // 2. Batch query user's progress counts per roadmap (completed / in_progress)
+    const progressCounts = await client
+      .select({
+        roadmapId: schema.studentRoadmapProgress.roadmapId,
+        status: schema.studentRoadmapProgress.status,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(schema.studentRoadmapProgress)
+      .where(
+        and(
+          eq(schema.studentRoadmapProgress.userId, userId),
+          inArray(schema.studentRoadmapProgress.roadmapId, roadmapIds)
+        )
+      )
+      .groupBy(schema.studentRoadmapProgress.roadmapId, schema.studentRoadmapProgress.status);
+
+    const completedMap = new Map<number, number>();
+    const inProgressMap = new Map<number, number>();
+
+    progressCounts.forEach((pc) => {
+      if (pc.status === "completed") {
+        completedMap.set(pc.roadmapId, pc.count);
+      } else if (pc.status === "in_progress") {
+        inProgressMap.set(pc.roadmapId, pc.count);
+      }
+    });
+
+    return allRoadmaps.map((r) => {
+      const totalNodes = nodeCountMap.get(r.roadmapId) || 0;
+      const completedNodes = completedMap.get(r.roadmapId) || 0;
+      const inProgressNodes = inProgressMap.get(r.roadmapId) || 0;
+      const completionPercentage =
+        totalNodes > 0 ? parseFloat(((completedNodes / totalNodes) * 100).toFixed(2)) : 0;
+
+      return {
+        roadmapId: r.roadmapId,
+        title: r.title,
+        description: r.description,
+        career: r.career,
+        totalNodes,
+        completedNodes,
+        inProgressNodes,
+        completionPercentage,
+      };
+    });
+  }
+
+  async deleteRoadmap(roadmapId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("RoadmapRepository.deleteRoadmap", { roadmapId });
+
+    const [deleted] = await client
+      .delete(schema.roadmaps)
+      .where(eq(schema.roadmaps.roadmapId, roadmapId))
+      .returning();
+
+    return !!deleted;
+  }
+
+  // ==========================================
+  // Roadmap Nodes
+  // ==========================================
+
+  async getNodeById(nodeId: number): Promise<RoadmapNodeDTO | null> {
+    const client = this.getDb();
+    Logger.debug("RoadmapRepository.getNodeById", { nodeId });
+
+    const [record] = await client
+      .select()
+      .from(schema.roadmapNodes)
+      .where(eq(schema.roadmapNodes.nodeId, nodeId));
+
+    if (!record) return null;
+
+    return {
+      nodeId: record.nodeId,
+      roadmapId: record.roadmapId,
+      title: record.title,
+      description: record.description,
+      sequenceNo: record.sequenceNo,
+    };
+  }
+
+  async listNodesByRoadmap(roadmapId: number): Promise<RoadmapNodeDTO[]> {
+    const client = this.getDb();
+    Logger.debug("RoadmapRepository.listNodesByRoadmap", { roadmapId });
+
+    const records = await client
+      .select()
+      .from(schema.roadmapNodes)
+      .where(eq(schema.roadmapNodes.roadmapId, roadmapId))
+      .orderBy(asc(schema.roadmapNodes.sequenceNo));
+
+    return records.map((n) => ({
+      nodeId: n.nodeId,
+      roadmapId: n.roadmapId,
+      title: n.title,
+      description: n.description,
+      sequenceNo: n.sequenceNo,
+    }));
+  }
+
   async getRoadmapWithNodes(roadmapId: number): Promise<RoadmapWithNodes | null> {
     const client = this.getDb();
     Logger.debug("RoadmapRepository.getRoadmapWithNodes", { roadmapId });
@@ -92,21 +220,11 @@ export class RoadmapRepository {
     const roadmap = await this.getRoadmapById(roadmapId);
     if (!roadmap) return null;
 
-    const nodes = await client
-      .select()
-      .from(schema.roadmapNodes)
-      .where(eq(schema.roadmapNodes.roadmapId, roadmapId))
-      .orderBy(asc(schema.roadmapNodes.sequenceNo));
+    const nodes = await this.listNodesByRoadmap(roadmapId);
 
     return {
       roadmap,
-      nodes: nodes.map((n) => ({
-        nodeId: n.nodeId,
-        roadmapId: n.roadmapId,
-        title: n.title,
-        description: n.description,
-        sequenceNo: n.sequenceNo,
-      })),
+      nodes,
     };
   }
 
@@ -274,6 +392,26 @@ export class RoadmapRepository {
       status: record.status as RoadmapProgressStatus,
       completedAt: record.completedAt,
     };
+  }
+
+  /**
+   * Resets/clears all node progress records for a user on a specific roadmap.
+   */
+  async resetStudentRoadmapProgress(userId: number, roadmapId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("RoadmapRepository.resetStudentRoadmapProgress", { userId, roadmapId });
+
+    const deleted = await client
+      .delete(schema.studentRoadmapProgress)
+      .where(
+        and(
+          eq(schema.studentRoadmapProgress.userId, userId),
+          eq(schema.studentRoadmapProgress.roadmapId, roadmapId)
+        )
+      )
+      .returning();
+
+    return deleted.length > 0;
   }
 }
 

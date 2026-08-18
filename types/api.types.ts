@@ -382,6 +382,20 @@ export interface StudentRoadmapProgressDTO {
 }
 
 /**
+ * Roadmap with Aggregated Student Progress Summary DTO (Roadmap Hub Overview)
+ */
+export interface RoadmapWithProgressSummaryDTO {
+  roadmapId: number;
+  title: string;
+  description: string | null;
+  career: string | null;
+  totalNodes: number;
+  completedNodes: number;
+  inProgressNodes: number;
+  completionPercentage: number;
+}
+
+/**
  * Opportunities DTO
  */
 export interface OpportunityDTO {
