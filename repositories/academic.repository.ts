@@ -37,6 +37,11 @@ export interface CourseWithHierarchy {
   college: CollegeDTO;
 }
 
+export interface CollegeWithSchemes {
+  college: CollegeDTO;
+  schemes: AcademicSchemeDTO[];
+}
+
 export class AcademicRepository {
   private getDb() {
     if (!db) {
@@ -84,6 +89,21 @@ export class AcademicRepository {
     };
   }
 
+  async getCollegeWithSchemes(collegeId: number): Promise<CollegeWithSchemes | null> {
+    const client = this.getDb();
+    Logger.debug("AcademicRepository.getCollegeWithSchemes", { collegeId });
+
+    const college = await this.getCollegeById(collegeId);
+    if (!college) return null;
+
+    const schemes = await this.listSchemesByCollege(collegeId);
+
+    return {
+      college,
+      schemes,
+    };
+  }
+
   async createCollege(input: CreateCollegeInput): Promise<CollegeDTO> {
     const client = this.getDb();
     Logger.info("AcademicRepository.createCollege", { name: input.collegeName });
@@ -107,6 +127,39 @@ export class AcademicRepository {
   // ==========================================
   // Academic Schemes Operations
   // ==========================================
+
+  async listAllSchemes(): Promise<AcademicSchemeDTO[]> {
+    const client = this.getDb();
+    Logger.debug("AcademicRepository.listAllSchemes");
+
+    const records = await client.select().from(schema.academicSchemes);
+
+    return records.map((r) => ({
+      schemeId: r.schemeId,
+      collegeId: r.collegeId,
+      schemeName: r.schemeName,
+      academicYear: r.academicYear,
+    }));
+  }
+
+  async getSchemeById(schemeId: number): Promise<AcademicSchemeDTO | null> {
+    const client = this.getDb();
+    Logger.debug("AcademicRepository.getSchemeById", { schemeId });
+
+    const [record] = await client
+      .select()
+      .from(schema.academicSchemes)
+      .where(eq(schema.academicSchemes.schemeId, schemeId));
+
+    if (!record) return null;
+
+    return {
+      schemeId: record.schemeId,
+      collegeId: record.collegeId,
+      schemeName: record.schemeName,
+      academicYear: record.academicYear,
+    };
+  }
 
   async listSchemesByCollege(collegeId: number): Promise<AcademicSchemeDTO[]> {
     const client = this.getDb();
