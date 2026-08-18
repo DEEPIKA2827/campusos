@@ -6,11 +6,12 @@
  */
 
 import { db, schema } from "@/lib/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, or, desc, asc, ilike, isNull, gte, sql } from "drizzle-orm";
 import { Logger } from "@/lib/logger";
 import {
   ScholarshipDTO,
   StudentScholarshipBookmarkDTO,
+  ScholarshipWithBookmarkDTO,
 } from "@/types/api.types";
 
 export interface CreateScholarshipInput {
@@ -19,6 +20,11 @@ export interface CreateScholarshipInput {
   eligibility?: string | null;
   applicationUrl?: string | null;
   deadline?: string | null;
+}
+
+export interface ScholarshipFilter {
+  search?: string;
+  activeOnly?: boolean;
 }
 
 export interface BookmarkedScholarshipDetail {
@@ -37,13 +43,38 @@ export class ScholarshipRepository {
   }
 
   /**
-   * Lists all available scholarships.
+   * Lists all available scholarships with optional search and active deadline filters.
    */
-  async listScholarships(): Promise<ScholarshipDTO[]> {
+  async listScholarships(filter?: ScholarshipFilter): Promise<ScholarshipDTO[]> {
     const client = this.getDb();
-    Logger.debug("ScholarshipRepository.listScholarships");
+    Logger.debug("ScholarshipRepository.listScholarships", { ...filter });
 
-    const records = await client.select().from(schema.scholarships);
+    const conditions = [];
+
+    if (filter?.search?.trim()) {
+      const searchPattern = `%${filter.search.trim()}%`;
+      conditions.push(
+        or(
+          ilike(schema.scholarships.scholarshipName, searchPattern),
+          ilike(schema.scholarships.description, searchPattern),
+          ilike(schema.scholarships.eligibility, searchPattern)
+        )
+      );
+    }
+
+    if (filter?.activeOnly) {
+      conditions.push(
+        or(
+          isNull(schema.scholarships.deadline),
+          gte(schema.scholarships.deadline, sql`CURRENT_DATE`)
+        )
+      );
+    }
+
+    const query = client.select().from(schema.scholarships);
+    const records = conditions.length > 0
+      ? await query.where(and(...conditions)).orderBy(asc(schema.scholarships.deadline))
+      : await query.orderBy(asc(schema.scholarships.deadline));
 
     return records.map((r) => ({
       scholarshipId: r.scholarshipId,
@@ -52,6 +83,73 @@ export class ScholarshipRepository {
       eligibility: r.eligibility,
       applicationUrl: r.applicationUrl,
       deadline: r.deadline,
+    }));
+  }
+
+  /**
+   * Lists all scholarships with the current user's bookmark state in a single LEFT JOIN (0 N+1 queries).
+   */
+  async listScholarshipsWithBookmarkStatus(
+    userId: number,
+    filter?: ScholarshipFilter
+  ): Promise<ScholarshipWithBookmarkDTO[]> {
+    const client = this.getDb();
+    Logger.debug("ScholarshipRepository.listScholarshipsWithBookmarkStatus", { userId, ...filter });
+
+    const conditions = [];
+
+    if (filter?.search?.trim()) {
+      const searchPattern = `%${filter.search.trim()}%`;
+      conditions.push(
+        or(
+          ilike(schema.scholarships.scholarshipName, searchPattern),
+          ilike(schema.scholarships.description, searchPattern),
+          ilike(schema.scholarships.eligibility, searchPattern)
+        )
+      );
+    }
+
+    if (filter?.activeOnly) {
+      conditions.push(
+        or(
+          isNull(schema.scholarships.deadline),
+          gte(schema.scholarships.deadline, sql`CURRENT_DATE`)
+        )
+      );
+    }
+
+    const baseQuery = client
+      .select({
+        scholarshipId: schema.scholarships.scholarshipId,
+        scholarshipName: schema.scholarships.scholarshipName,
+        description: schema.scholarships.description,
+        eligibility: schema.scholarships.eligibility,
+        applicationUrl: schema.scholarships.applicationUrl,
+        deadline: schema.scholarships.deadline,
+        bookmarkedAt: schema.studentScholarshipBookmarks.bookmarkedAt,
+      })
+      .from(schema.scholarships)
+      .leftJoin(
+        schema.studentScholarshipBookmarks,
+        and(
+          eq(schema.scholarships.scholarshipId, schema.studentScholarshipBookmarks.scholarshipId),
+          eq(schema.studentScholarshipBookmarks.userId, userId)
+        )
+      );
+
+    const records = conditions.length > 0
+      ? await baseQuery.where(and(...conditions)).orderBy(asc(schema.scholarships.deadline))
+      : await baseQuery.orderBy(asc(schema.scholarships.deadline));
+
+    return records.map((r) => ({
+      scholarshipId: r.scholarshipId,
+      scholarshipName: r.scholarshipName,
+      description: r.description,
+      eligibility: r.eligibility,
+      applicationUrl: r.applicationUrl,
+      deadline: r.deadline,
+      isBookmarked: r.bookmarkedAt !== null,
+      bookmarkedAt: r.bookmarkedAt,
     }));
   }
 
@@ -105,6 +203,21 @@ export class ScholarshipRepository {
       applicationUrl: record.applicationUrl,
       deadline: record.deadline,
     };
+  }
+
+  /**
+   * Deletes a scholarship and relies on database ON DELETE CASCADE for bookmarks.
+   */
+  async deleteScholarship(scholarshipId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("ScholarshipRepository.deleteScholarship", { scholarshipId });
+
+    const [deleted] = await client
+      .delete(schema.scholarships)
+      .where(eq(schema.scholarships.scholarshipId, scholarshipId))
+      .returning();
+
+    return !!deleted;
   }
 
   /**

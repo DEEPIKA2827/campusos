@@ -322,6 +322,14 @@ export interface ScholarshipDTO {
 }
 
 /**
+ * Scholarship with User Bookmark State DTO (Catalog Feed)
+ */
+export interface ScholarshipWithBookmarkDTO extends ScholarshipDTO {
+  isBookmarked: boolean;
+  bookmarkedAt: string | null;
+}
+
+/**
  * Student Scholarship Bookmarks DTO
  */
 export interface StudentScholarshipBookmarkDTO {
