@@ -5,13 +5,17 @@
  */
 
 export interface CreateProfileInput {
-  fullName: string;
-  collegeName: string;
-  collegeType: "vtu_affiliated" | "autonomous";
-  branch: string;
-  semester: number;
-  targetSgpa: number;
-  primaryGoal: string;
+  firstName: string;
+  lastName?: string;
+  collegeId: number;
+  courseId: number;
+  semester?: number;
+}
+
+export interface CreateSettingsInput {
+  notificationEnabled?: boolean;
+  theme?: string;
+  language?: string;
 }
 
 export class ProfileValidation {
@@ -22,24 +26,43 @@ export class ProfileValidation {
   static validateCreateInput(data: Partial<CreateProfileInput>): { valid: boolean; errors?: string[] } {
     const errors: string[] = [];
 
-    if (!data.fullName || data.fullName.trim().length < 2) {
-      errors.push("Full name must be at least 2 characters long.");
+    if (!data.firstName || data.firstName.trim().length === 0) {
+      errors.push("First name is required.");
     }
 
-    if (!data.collegeName || data.collegeName.trim().length === 0) {
-      errors.push("College name is required.");
+    if (data.collegeId === undefined || typeof data.collegeId !== "number") {
+      errors.push("College ID is required and must be a number.");
     }
 
-    if (!data.collegeType || !["vtu_affiliated", "autonomous"].includes(data.collegeType)) {
-      errors.push("College type must be 'vtu_affiliated' or 'autonomous'.");
+    if (data.courseId === undefined || typeof data.courseId !== "number") {
+      errors.push("Course ID is required and must be a number.");
     }
 
-    if (typeof data.semester !== "number" || data.semester < 1 || data.semester > 8) {
-      errors.push("Semester must be a valid integer between 1 and 8.");
+    if (data.semester !== undefined) {
+      if (typeof data.semester !== "number" || data.semester < 1 || data.semester > 8) {
+        errors.push("Semester must be a valid integer between 1 and 8.");
+      }
     }
 
-    if (typeof data.targetSgpa !== "number" || data.targetSgpa < 0 || data.targetSgpa > 10) {
-      errors.push("Target SGPA must be a number between 0 and 10.");
+    return {
+      valid: errors.length === 0,
+      errors: errors.length > 0 ? errors : undefined,
+    };
+  }
+
+  static validateSettingsInput(data: Partial<CreateSettingsInput>): { valid: boolean; errors?: string[] } {
+    const errors: string[] = [];
+    
+    if (data.notificationEnabled !== undefined && typeof data.notificationEnabled !== "boolean") {
+      errors.push("Notification enabled must be a boolean.");
+    }
+
+    if (data.theme !== undefined && typeof data.theme !== "string") {
+      errors.push("Theme must be a string.");
+    }
+
+    if (data.language !== undefined && typeof data.language !== "string") {
+      errors.push("Language must be a string.");
     }
 
     return {

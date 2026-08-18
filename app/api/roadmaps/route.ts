@@ -23,14 +23,27 @@ export async function GET(request: NextRequest) {
 
     // Starter DTO response matching RoadmapDTO contract
     // TODO: Move to RoadmapService & RoadmapRepository once database table exists
-    const roadmap: RoadmapDTO = {
-      id: `roadmap-${branch}-sem-${semester}`,
-      branch,
-      semester,
+    const roadmap = {
+      roadmapId: 1,
       title: `Semester ${semester} SDE Velocity Track`,
       description: "Master foundational C programming, Linux CLI, Git, and solve 25 LeetCode Easy problems.",
-      skills: ["C Programming", "Git & GitHub", "Data Structures Basics", "Linux Terminal"],
-      projects: ["VTU SGPA & CIE Bunk Calculator Web App"],
+      career: "Software Engineer",
+      nodes: [
+        {
+          nodeId: 101,
+          roadmapId: 1,
+          title: "C Programming",
+          description: "Learn basic syntax, pointers, and memory management",
+          sequenceNo: 1,
+        },
+        {
+          nodeId: 102,
+          roadmapId: 1,
+          title: "Linux CLI & Git",
+          description: "Navigate the terminal and version control",
+          sequenceNo: 2,
+        },
+      ]
     };
 
     return ResponseBuilder.success(roadmap, "Roadmap retrieved successfully");

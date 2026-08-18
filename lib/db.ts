@@ -1,40 +1,53 @@
 /**
  * @file lib/db.ts
- * @description Database connection client infrastructure singleton wrapper.
- * @purpose Initializes and exports the database client (Prisma ORM / Supabase Client).
+ * @description PostgreSQL / Supabase Database client using Drizzle ORM.
+ * @purpose Initializes and exports singleton Drizzle instance bound to all 21 schemas.
  */
 
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import * as schema from "@/db/schema";
 import { Logger } from "./logger";
 
-/**
- * Placeholder Database Client Singleton.
- * TODO: Instantiate PrismaClient or Supabase client once ORM packages are installed.
- * 
- * Example Prisma Client Pattern:
- * import { PrismaClient } from "@prisma/client";
- * declare global { var prisma: PrismaClient | undefined; }
- * export const db = global.prisma || new PrismaClient();
- * if (process.env.NODE_ENV !== "production") global.prisma = db;
- */
+// Database Connection String from environment
+const connectionString = process.env.DATABASE_URL || "";
 
-export class DatabaseClient {
-  private static isConnected = false;
+declare global {
+  // eslint-disable-next-line no-var
+  var __dbClient: ReturnType<typeof drizzle<typeof schema>> | undefined;
+  // eslint-disable-next-line no-var
+  var __pgClient: postgres.Sql | undefined;
+}
 
-  static async connect(): Promise<boolean> {
-    if (this.isConnected) return true;
-    
-    Logger.info("Initializing Database Connection Pool...");
-    // TODO: Perform health check ping against PostgreSQL (Neon/Supabase)
-    this.isConnected = true;
-    return this.isConnected;
+function createDatabaseClient() {
+  if (!connectionString) {
+    Logger.warn("DATABASE_URL environment variable is not defined. Initializing database client in standby mode.");
+    return null;
   }
 
-  static async disconnect(): Promise<void> {
-    if (!this.isConnected) return;
-    Logger.info("Disconnecting Database Pool...");
-    // TODO: Graceful teardown of connection pool
-    this.isConnected = false;
+  try {
+    const pgClient = global.__pgClient || postgres(connectionString, {
+      max: process.env.DB_MAX_CONNECTIONS ? parseInt(process.env.DB_MAX_CONNECTIONS, 10) : 10,
+      idle_timeout: 20,
+      connect_timeout: 10,
+    });
+
+    if (process.env.NODE_ENV !== "production") {
+      global.__pgClient = pgClient;
+    }
+
+    const drizzleDb = global.__dbClient || drizzle(pgClient, { schema });
+
+    if (process.env.NODE_ENV !== "production") {
+      global.__dbClient = drizzleDb;
+    }
+
+    return drizzleDb;
+  } catch (error) {
+    Logger.error("Failed to initialize PostgreSQL connection pool", error);
+    return null;
   }
 }
 
-export const db = DatabaseClient;
+export const db = createDatabaseClient();
+export { schema };

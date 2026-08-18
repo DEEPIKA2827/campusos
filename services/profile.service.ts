@@ -15,7 +15,7 @@ export class ProfileService {
   /**
    * Retrieves profile for an authenticated student.
    */
-  async getStudentProfile(userId: string): Promise<StudentProfileDTO | null> {
+  async getStudentProfile(userId: number): Promise<StudentProfileDTO | null> {
     Logger.info("ProfileService.getStudentProfile invoked", { userId });
     return this.repo.findByUserId(userId);
   }
@@ -23,7 +23,7 @@ export class ProfileService {
   /**
    * Orchestrates profile setup: validates input schema, checks duplicate registration, saves via repository.
    */
-  async setupStudentProfile(userId: string, email: string, input: CreateProfileInput): Promise<StudentProfileDTO> {
+  async setupStudentProfile(userId: number, input: CreateProfileInput): Promise<StudentProfileDTO> {
     Logger.info("ProfileService.setupStudentProfile invoked", { userId });
 
     // Step 1: Validate input fields
@@ -39,7 +39,7 @@ export class ProfileService {
     }
 
     // Step 3: Persist via Data Access Layer
-    return this.repo.createProfile(userId, email, input);
+    return this.repo.createProfile(userId, input);
   }
 }
 

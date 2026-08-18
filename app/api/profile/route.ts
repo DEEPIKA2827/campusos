@@ -16,7 +16,7 @@ import { Logger } from "@/lib/logger";
 export async function GET() {
   try {
     // TODO: Extract authenticated User ID from request context (Auth Session)
-    const demoUserId = "demo-vtu-user-123";
+    const demoUserId = 1;
 
     Logger.info("GET /api/profile requested", { userId: demoUserId });
     const profile = await profileService.getStudentProfile(demoUserId);
@@ -40,12 +40,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // TODO: Extract authenticated User ID & Email from Auth context
-    const demoUserId = "demo-vtu-user-123";
-    const demoEmail = "student@rvce.edu.in";
+    // TODO: Extract authenticated User ID from Auth context
+    const demoUserId = 1;
 
     Logger.info("POST /api/profile requested", { userId: demoUserId });
-    const newProfile = await profileService.setupStudentProfile(demoUserId, demoEmail, body);
+    const newProfile = await profileService.setupStudentProfile(demoUserId, body);
 
     return ResponseBuilder.success(newProfile, "Profile created successfully", 201);
   } catch (error: unknown) {

@@ -1,49 +1,34 @@
 /**
  * @file repositories/profile.repository.ts
- * @description Data Access Layer (DAL) for Student Profiles.
- * @purpose Encapsulates all raw database queries (Prisma/SQL) for profile data persistence.
+ * @description Data Access Layer for Student Profiles.
+ * @purpose Delegates to canonical UserRepository while maintaining backwards compatibility.
  */
 
 import { StudentProfileDTO } from "@/types/api.types";
 import { CreateProfileInput } from "@/validations/profile.validation";
-import { Logger } from "@/lib/logger";
+import { userRepository, UserRepository } from "./user.repository";
 
 export class ProfileRepository {
+  constructor(private userRepo: UserRepository = userRepository) {}
+
   /**
    * Finds a student profile by their unique User ID.
-   * TODO: Connect SQL query / prisma.profile.findUnique({ where: { userId } })
    */
-  async findByUserId(userId: string): Promise<StudentProfileDTO | null> {
-    Logger.debug("ProfileRepository.findByUserId executed", { userId });
-    
-    // TODO: Fetch from PostgreSQL database table 'profiles'
-    return null;
+  async findByUserId(userId: number): Promise<StudentProfileDTO | null> {
+    return this.userRepo.getProfile(userId);
   }
 
   /**
-   * Persists a new student profile in the database.
-   * TODO: Connect SQL query / prisma.profile.create({ data })
+   * Persists / updates a student profile in the database.
    */
-  async createProfile(userId: string, email: string, input: CreateProfileInput): Promise<StudentProfileDTO> {
-    Logger.debug("ProfileRepository.createProfile executed", { userId, email });
-
-    // Starter return structure enforcing domain interface DTO contract
-    const newProfile: StudentProfileDTO = {
-      id: "demo-profile-id-101",
-      userId,
-      email,
-      fullName: input.fullName,
-      collegeName: input.collegeName,
-      collegeType: input.collegeType,
-      branch: input.branch,
-      semester: input.semester,
-      targetSgpa: input.targetSgpa,
-      primaryGoal: input.primaryGoal,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    return newProfile;
+  async createProfile(userId: number, input: CreateProfileInput): Promise<StudentProfileDTO> {
+    return this.userRepo.upsertProfile(userId, {
+      firstName: input.firstName,
+      lastName: input.lastName || null,
+      collegeId: input.collegeId,
+      courseId: input.courseId,
+      semester: input.semester || null,
+    });
   }
 }
 

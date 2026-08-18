@@ -8,7 +8,7 @@ This document details the production backend architecture for **CampusOS**, buil
 * **Framework**: Next.js 16 App Router (Node.js / Edge Runtime Route Handlers)
 * **Language**: TypeScript
 * **Database**: PostgreSQL (Hosted on Supabase or Neon)
-* **ORM / Query Builder**: Prisma ORM
+* **ORM / Query Builder**: ORM (selection pending — Drizzle/Prisma)
 * **Authentication**: Clerk or Supabase Auth
 * **Deployment**: Vercel
 
@@ -96,10 +96,10 @@ When a client sends an HTTP request to the CampusOS API, it traverses a strict 4
 
 ## 6. Future Integration Roadmaps
 
-### A. Future Database Integration (Prisma ORM + PostgreSQL)
-1. Install Prisma: `npm install @prisma/client` and `npm install -D prisma`.
-2. Define Prisma Schema (`prisma/schema.prisma`) for `Profile`, `AttendanceLog`, `CieMarks`, `TrackedScholarship`, `ChatSession`.
-3. Update `lib/db.ts` to export singleton `prismaClient`.
+### A. Future Database Integration
+1. Install chosen ORM and configure database connection.
+2. Define schema for Student Profiles, Roadmaps, and Settings.
+3. Update `lib/db.ts` to export the initialized client.
 4. Implement SQL queries inside `repositories/*.repository.ts` methods.
 
 ### B. Future Authentication Integration (Clerk / Supabase Auth)
