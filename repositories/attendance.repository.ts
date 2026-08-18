@@ -6,11 +6,12 @@
  */
 
 import { db, schema } from "@/lib/db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import { Logger } from "@/lib/logger";
 import {
   AttendanceLogDTO,
   AttendanceSummaryDTO,
+  AttendanceSummaryWithCourseDTO,
   AttendanceStatus,
 } from "@/types/api.types";
 
@@ -95,6 +96,45 @@ export class AttendanceRepository {
   }
 
   /**
+   * Fetches attendance logs for a student and course within a specific date range.
+   */
+  async getLogsByDateRange(
+    userId: number,
+    courseId: number,
+    startDate: string,
+    endDate: string
+  ): Promise<AttendanceLogDTO[]> {
+    const client = this.getDb();
+    Logger.debug("AttendanceRepository.getLogsByDateRange", {
+      userId,
+      courseId,
+      startDate,
+      endDate,
+    });
+
+    const records = await client
+      .select()
+      .from(schema.attendanceLogs)
+      .where(
+        and(
+          eq(schema.attendanceLogs.userId, userId),
+          eq(schema.attendanceLogs.courseId, courseId),
+          gte(schema.attendanceLogs.attendanceDate, startDate),
+          lte(schema.attendanceLogs.attendanceDate, endDate)
+        )
+      )
+      .orderBy(desc(schema.attendanceLogs.attendanceDate));
+
+    return records.map((r) => ({
+      attendanceId: r.attendanceId,
+      userId: r.userId,
+      courseId: r.courseId,
+      attendanceDate: r.attendanceDate,
+      status: r.status as AttendanceStatus,
+    }));
+  }
+
+  /**
    * Fetches the attendance summary for a student in a specific course.
    */
   async getSummary(userId: number, courseId: number): Promise<AttendanceSummaryDTO | null> {
@@ -139,6 +179,45 @@ export class AttendanceRepository {
       summaryId: r.summaryId,
       userId: r.userId,
       courseId: r.courseId,
+      totalClasses: r.totalClasses,
+      attendedClasses: r.attendedClasses,
+      attendancePercentage: parseFloat(r.attendancePercentage),
+    }));
+  }
+
+  /**
+   * Fetches all attendance summaries joined with course details for student dashboard in a single query.
+   */
+  async getSummariesWithCourseDetails(
+    userId: number
+  ): Promise<AttendanceSummaryWithCourseDTO[]> {
+    const client = this.getDb();
+    Logger.debug("AttendanceRepository.getSummariesWithCourseDetails", { userId });
+
+    const records = await client
+      .select({
+        summaryId: schema.attendanceSummaries.summaryId,
+        userId: schema.attendanceSummaries.userId,
+        courseId: schema.attendanceSummaries.courseId,
+        courseName: schema.courses.courseName,
+        courseCode: schema.courses.courseCode,
+        totalClasses: schema.attendanceSummaries.totalClasses,
+        attendedClasses: schema.attendanceSummaries.attendedClasses,
+        attendancePercentage: schema.attendanceSummaries.attendancePercentage,
+      })
+      .from(schema.attendanceSummaries)
+      .innerJoin(
+        schema.courses,
+        eq(schema.attendanceSummaries.courseId, schema.courses.courseId)
+      )
+      .where(eq(schema.attendanceSummaries.userId, userId));
+
+    return records.map((r) => ({
+      summaryId: r.summaryId,
+      userId: r.userId,
+      courseId: r.courseId,
+      courseName: r.courseName,
+      courseCode: r.courseCode,
       totalClasses: r.totalClasses,
       attendedClasses: r.attendedClasses,
       attendancePercentage: parseFloat(r.attendancePercentage),
@@ -305,6 +384,107 @@ export class AttendanceRepository {
           attendanceDate: logRecord.attendanceDate,
           status: logRecord.status as AttendanceStatus,
         },
+        summary: {
+          summaryId: summaryRecord.summaryId,
+          userId: summaryRecord.userId,
+          courseId: summaryRecord.courseId,
+          totalClasses: summaryRecord.totalClasses,
+          attendedClasses: summaryRecord.attendedClasses,
+          attendancePercentage: parseFloat(summaryRecord.attendancePercentage),
+        },
+      };
+    });
+  }
+
+  /**
+   * Atomically deletes an attendance log and synchronizes the computed summary within a single transaction.
+   */
+  async deleteLogWithSummaryUpdate(
+    attendanceId: number,
+    userId: number,
+    courseId: number
+  ): Promise<{ success: boolean; summary: AttendanceSummaryDTO }> {
+    const client = this.getDb();
+    Logger.info("AttendanceRepository.deleteLogWithSummaryUpdate (atomic)", {
+      attendanceId,
+      userId,
+      courseId,
+    });
+
+    return await client.transaction(async (tx) => {
+      // 1. Delete Log
+      const [deletedLog] = await tx
+        .delete(schema.attendanceLogs)
+        .where(
+          and(
+            eq(schema.attendanceLogs.attendanceId, attendanceId),
+            eq(schema.attendanceLogs.userId, userId),
+            eq(schema.attendanceLogs.courseId, courseId)
+          )
+        )
+        .returning();
+
+      if (!deletedLog) {
+        throw new Error(`Attendance log not found with ID: ${attendanceId} for user ${userId}`);
+      }
+
+      // 2. Re-aggregate in tx
+      const [counts] = await tx
+        .select({
+          totalClasses: sql<number>`count(*)::int`,
+          attendedClasses: sql<number>`count(*) filter (where ${schema.attendanceLogs.status} in ('present', 'late'))::int`,
+        })
+        .from(schema.attendanceLogs)
+        .where(
+          and(
+            eq(schema.attendanceLogs.userId, userId),
+            eq(schema.attendanceLogs.courseId, courseId)
+          )
+        );
+
+      const total = counts?.totalClasses || 0;
+      const attended = counts?.attendedClasses || 0;
+      const percentage = total > 0 ? ((attended / total) * 100).toFixed(2) : "0.00";
+
+      // 3. Upsert / update summary in tx
+      const [existing] = await tx
+        .select()
+        .from(schema.attendanceSummaries)
+        .where(
+          and(
+            eq(schema.attendanceSummaries.userId, userId),
+            eq(schema.attendanceSummaries.courseId, courseId)
+          )
+        );
+
+      let summaryRecord;
+      if (existing) {
+        const [updated] = await tx
+          .update(schema.attendanceSummaries)
+          .set({
+            totalClasses: total,
+            attendedClasses: attended,
+            attendancePercentage: percentage,
+          })
+          .where(eq(schema.attendanceSummaries.summaryId, existing.summaryId))
+          .returning();
+        summaryRecord = updated;
+      } else {
+        const [inserted] = await tx
+          .insert(schema.attendanceSummaries)
+          .values({
+            userId,
+            courseId,
+            totalClasses: total,
+            attendedClasses: attended,
+            attendancePercentage: percentage,
+          })
+          .returning();
+        summaryRecord = inserted;
+      }
+
+      return {
+        success: true,
         summary: {
           summaryId: summaryRecord.summaryId,
           userId: summaryRecord.userId,

@@ -168,6 +168,20 @@ export interface AttendanceSummaryDTO {
 }
 
 /**
+ * Attendance Summary with Course Details (Joined DTO)
+ */
+export interface AttendanceSummaryWithCourseDTO {
+  summaryId: number;
+  userId: number;
+  courseId: number;
+  courseName: string;
+  courseCode: string | null;
+  totalClasses: number;
+  attendedClasses: number;
+  attendancePercentage: number;
+}
+
+/**
  * CIE Assessments DTO
  */
 export interface CieAssessmentDTO {
