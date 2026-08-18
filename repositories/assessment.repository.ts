@@ -11,6 +11,7 @@ import { Logger } from "@/lib/logger";
 import {
   CieAssessmentDTO,
   StudentCieMarkDTO,
+  StudentCieMarkWithCourseDTO,
   PyqDTO,
   VivaQuestionDTO,
   Difficulty,
@@ -80,6 +81,26 @@ export class AssessmentRepository {
     }));
   }
 
+  async getCieAssessmentById(cieId: number): Promise<CieAssessmentDTO | null> {
+    const client = this.getDb();
+    Logger.debug("AssessmentRepository.getCieAssessmentById", { cieId });
+
+    const [record] = await client
+      .select()
+      .from(schema.cieAssessments)
+      .where(eq(schema.cieAssessments.cieId, cieId));
+
+    if (!record) return null;
+
+    return {
+      cieId: record.cieId,
+      courseId: record.courseId,
+      assessmentName: record.assessmentName,
+      assessmentDate: record.assessmentDate,
+      maxMarks: parseFloat(record.maxMarks),
+    };
+  }
+
   async createCieAssessment(input: CreateCieAssessmentInput): Promise<CieAssessmentDTO> {
     const client = this.getDb();
     Logger.info("AssessmentRepository.createCieAssessment", { name: input.assessmentName });
@@ -101,6 +122,18 @@ export class AssessmentRepository {
       assessmentDate: record.assessmentDate,
       maxMarks: parseFloat(record.maxMarks),
     };
+  }
+
+  async deleteCieAssessment(cieId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("AssessmentRepository.deleteCieAssessment", { cieId });
+
+    const [deleted] = await client
+      .delete(schema.cieAssessments)
+      .where(eq(schema.cieAssessments.cieId, cieId))
+      .returning();
+
+    return !!deleted;
   }
 
   // ==========================================
@@ -125,6 +158,33 @@ export class AssessmentRepository {
         },
       })
       .returning();
+
+    return {
+      markId: record.markId,
+      userId: record.userId,
+      cieId: record.cieId,
+      marksObtained: parseFloat(record.marksObtained),
+    };
+  }
+
+  async getStudentMarkByAssessment(
+    userId: number,
+    cieId: number
+  ): Promise<StudentCieMarkDTO | null> {
+    const client = this.getDb();
+    Logger.debug("AssessmentRepository.getStudentMarkByAssessment", { userId, cieId });
+
+    const [record] = await client
+      .select()
+      .from(schema.studentCieMarks)
+      .where(
+        and(
+          eq(schema.studentCieMarks.userId, userId),
+          eq(schema.studentCieMarks.cieId, cieId)
+        )
+      );
+
+    if (!record) return null;
 
     return {
       markId: record.markId,
@@ -175,6 +235,70 @@ export class AssessmentRepository {
         maxMarks: parseFloat(r.maxMarks),
       },
     }));
+  }
+
+  /**
+   * Retrieves all marks across all courses for a student in a single 3-table join query.
+   */
+  async getAllStudentMarksWithDetails(
+    userId: number
+  ): Promise<StudentCieMarkWithCourseDTO[]> {
+    const client = this.getDb();
+    Logger.debug("AssessmentRepository.getAllStudentMarksWithDetails", { userId });
+
+    const records = await client
+      .select({
+        markId: schema.studentCieMarks.markId,
+        userId: schema.studentCieMarks.userId,
+        cieId: schema.studentCieMarks.cieId,
+        marksObtained: schema.studentCieMarks.marksObtained,
+        assessmentName: schema.cieAssessments.assessmentName,
+        assessmentDate: schema.cieAssessments.assessmentDate,
+        maxMarks: schema.cieAssessments.maxMarks,
+        courseId: schema.courses.courseId,
+        courseName: schema.courses.courseName,
+        courseCode: schema.courses.courseCode,
+      })
+      .from(schema.studentCieMarks)
+      .innerJoin(
+        schema.cieAssessments,
+        eq(schema.studentCieMarks.cieId, schema.cieAssessments.cieId)
+      )
+      .innerJoin(
+        schema.courses,
+        eq(schema.cieAssessments.courseId, schema.courses.courseId)
+      )
+      .where(eq(schema.studentCieMarks.userId, userId));
+
+    return records.map((r) => ({
+      markId: r.markId,
+      userId: r.userId,
+      cieId: r.cieId,
+      marksObtained: parseFloat(r.marksObtained),
+      assessmentName: r.assessmentName,
+      assessmentDate: r.assessmentDate,
+      maxMarks: parseFloat(r.maxMarks),
+      courseId: r.courseId,
+      courseName: r.courseName,
+      courseCode: r.courseCode,
+    }));
+  }
+
+  async deleteStudentMark(markId: number, userId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("AssessmentRepository.deleteStudentMark", { markId, userId });
+
+    const [deleted] = await client
+      .delete(schema.studentCieMarks)
+      .where(
+        and(
+          eq(schema.studentCieMarks.markId, markId),
+          eq(schema.studentCieMarks.userId, userId)
+        )
+      )
+      .returning();
+
+    return !!deleted;
   }
 
   // ==========================================

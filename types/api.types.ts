@@ -212,6 +212,22 @@ export interface StudentCieMarkDTO {
 }
 
 /**
+ * Student CIE Mark with Assessment & Course Details (Joined DTO)
+ */
+export interface StudentCieMarkWithCourseDTO {
+  markId: number;
+  userId: number;
+  cieId: number;
+  marksObtained: number;
+  assessmentName: string;
+  assessmentDate: string | null;
+  maxMarks: number;
+  courseId: number;
+  courseName: string;
+  courseCode: string | null;
+}
+
+/**
  * PYQs DTO
  */
 export interface PyqDTO {
