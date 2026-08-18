@@ -6,11 +6,12 @@
  */
 
 import { db, schema } from "@/lib/db";
-import { eq, and, asc, desc } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, sql } from "drizzle-orm";
 import { Logger } from "@/lib/logger";
 import {
   ChatThreadDTO,
   ChatMessageDTO,
+  ChatThreadPreviewDTO,
   ChatSenderType,
 } from "@/types/api.types";
 
@@ -53,6 +54,65 @@ export class ChatRepository {
   }
 
   /**
+   * Retrieves a chat thread by ID, strictly scoped to the owning user.
+   */
+  async getThreadById(chatId: number, userId: number): Promise<ChatThreadDTO | null> {
+    const client = this.getDb();
+    Logger.debug("ChatRepository.getThreadById", { chatId, userId });
+
+    const [record] = await client
+      .select()
+      .from(schema.chatThreads)
+      .where(
+        and(
+          eq(schema.chatThreads.chatId, chatId),
+          eq(schema.chatThreads.userId, userId)
+        )
+      );
+
+    if (!record) return null;
+
+    return {
+      chatId: record.chatId,
+      userId: record.userId,
+      title: record.title,
+      createdAt: record.createdAt,
+    };
+  }
+
+  /**
+   * Updates the title of a chat thread, strictly scoped to the owning user.
+   */
+  async updateThreadTitle(
+    chatId: number,
+    userId: number,
+    title: string
+  ): Promise<ChatThreadDTO | null> {
+    const client = this.getDb();
+    Logger.info("ChatRepository.updateThreadTitle", { chatId, userId, title });
+
+    const [record] = await client
+      .update(schema.chatThreads)
+      .set({ title: title.trim() })
+      .where(
+        and(
+          eq(schema.chatThreads.chatId, chatId),
+          eq(schema.chatThreads.userId, userId)
+        )
+      )
+      .returning();
+
+    if (!record) return null;
+
+    return {
+      chatId: record.chatId,
+      userId: record.userId,
+      title: record.title,
+      createdAt: record.createdAt,
+    };
+  }
+
+  /**
    * Lists all chat threads created by a user, ordered by most recent first.
    */
   async listUserThreads(userId: number): Promise<ChatThreadDTO[]> {
@@ -71,6 +131,61 @@ export class ChatRepository {
       title: r.title,
       createdAt: r.createdAt,
     }));
+  }
+
+  /**
+   * Lists all chat threads for a user with latest message snippet and message count (No N+1 queries).
+   */
+  async listUserThreadsWithPreview(userId: number): Promise<ChatThreadPreviewDTO[]> {
+    const client = this.getDb();
+    Logger.debug("ChatRepository.listUserThreadsWithPreview", { userId });
+
+    const threads = await this.listUserThreads(userId);
+    if (threads.length === 0) return [];
+
+    const chatIds = threads.map((t) => t.chatId);
+
+    // 1. Fetch message counts per thread
+    const counts = await client
+      .select({
+        chatId: schema.chatMessages.chatId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(schema.chatMessages)
+      .where(inArray(schema.chatMessages.chatId, chatIds))
+      .groupBy(schema.chatMessages.chatId);
+
+    const countMap = new Map<number, number>();
+    counts.forEach((c) => countMap.set(c.chatId, c.count));
+
+    // 2. Fetch latest message per thread using DISTINCT ON (PostgreSQL)
+    const latestMessages = await client
+      .selectDistinctOn([schema.chatMessages.chatId], {
+        chatId: schema.chatMessages.chatId,
+        message: schema.chatMessages.message,
+        senderType: schema.chatMessages.senderType,
+        createdAt: schema.chatMessages.createdAt,
+      })
+      .from(schema.chatMessages)
+      .where(inArray(schema.chatMessages.chatId, chatIds))
+      .orderBy(schema.chatMessages.chatId, desc(schema.chatMessages.createdAt));
+
+    const latestMap = new Map<number, (typeof latestMessages)[0]>();
+    latestMessages.forEach((m) => latestMap.set(m.chatId, m));
+
+    return threads.map((t) => {
+      const latest = latestMap.get(t.chatId);
+      return {
+        chatId: t.chatId,
+        userId: t.userId,
+        title: t.title,
+        createdAt: t.createdAt,
+        lastMessage: latest ? latest.message : null,
+        lastSenderType: latest ? (latest.senderType as ChatSenderType) : null,
+        lastMessageAt: latest ? latest.createdAt : null,
+        messageCount: countMap.get(t.chatId) || 0,
+      };
+    });
   }
 
   /**
@@ -113,6 +228,43 @@ export class ChatRepository {
         createdAt: m.createdAt,
       })),
     };
+  }
+
+  /**
+   * Fetches paginated messages for a thread after strictly verifying user ownership.
+   */
+  async getMessagesByThread(
+    chatId: number,
+    userId: number,
+    limit = 50,
+    offset = 0
+  ): Promise<ChatMessageDTO[]> {
+    const client = this.getDb();
+    Logger.debug("ChatRepository.getMessagesByThread", { chatId, userId, limit, offset });
+
+    // 1. Verify thread ownership
+    const thread = await this.getThreadById(chatId, userId);
+    if (!thread) return [];
+
+    const safeLimit = Math.min(Math.max(1, limit), 100);
+    const safeOffset = Math.max(0, offset);
+
+    // 2. Fetch paginated messages in ascending chronological order
+    const records = await client
+      .select()
+      .from(schema.chatMessages)
+      .where(eq(schema.chatMessages.chatId, chatId))
+      .orderBy(asc(schema.chatMessages.createdAt))
+      .limit(safeLimit)
+      .offset(safeOffset);
+
+    return records.map((m) => ({
+      messageId: m.messageId,
+      chatId: m.chatId,
+      senderType: m.senderType as ChatSenderType,
+      message: m.message,
+      createdAt: m.createdAt,
+    }));
   }
 
   /**
@@ -208,6 +360,25 @@ export class ChatRepository {
         ],
       };
     });
+  }
+
+  /**
+   * Deletes all messages in a thread while preserving the thread container, scoped by user.
+   */
+  async clearThreadMessages(chatId: number, userId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("ChatRepository.clearThreadMessages", { chatId, userId });
+
+    // 1. Verify thread ownership
+    const thread = await this.getThreadById(chatId, userId);
+    if (!thread) return false;
+
+    // 2. Delete all messages for this verified thread
+    await client
+      .delete(schema.chatMessages)
+      .where(eq(schema.chatMessages.chatId, chatId));
+
+    return true;
   }
 
   /**

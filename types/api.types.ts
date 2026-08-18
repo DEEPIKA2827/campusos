@@ -290,6 +290,20 @@ export interface ChatMessageDTO {
 }
 
 /**
+ * Chat Thread Preview DTO (for Sidebar / Conversations List)
+ */
+export interface ChatThreadPreviewDTO {
+  chatId: number;
+  userId: number;
+  title: string | null;
+  createdAt: string;
+  lastMessage: string | null;
+  lastSenderType: ChatSenderType | null;
+  lastMessageAt: string | null;
+  messageCount: number;
+}
+
+/**
  * Scholarships DTO
  */
 export interface ScholarshipDTO {
