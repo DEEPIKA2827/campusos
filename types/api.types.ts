@@ -422,6 +422,16 @@ export interface OpportunityDTO {
 }
 
 /**
+ * Opportunity with Student Tracking Status DTO (Single-query feed)
+ */
+export interface OpportunityWithTrackingDTO extends OpportunityDTO {
+  /** Current user's tracking status ('saved' | 'applied' | 'shortlisted' | 'rejected' | null) */
+  trackingStatus: OpportunityStatus | null;
+  /** Timestamp when the opportunity was tracked (ISO string or null) */
+  savedAt: string | null;
+}
+
+/**
  * Student Opportunities DTO
  */
 export interface StudentOpportunityDTO {
@@ -434,3 +444,4 @@ export interface StudentOpportunityDTO {
   /** saved_at (TIMESTAMP) */
   savedAt: string;
 }
+

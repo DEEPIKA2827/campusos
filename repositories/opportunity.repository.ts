@@ -6,10 +6,11 @@
  */
 
 import { db, schema } from "@/lib/db";
-import { eq, and, desc, ilike, or } from "drizzle-orm";
+import { eq, and, desc, ilike, or, isNull, gte, sql } from "drizzle-orm";
 import { Logger } from "@/lib/logger";
 import {
   OpportunityDTO,
+  OpportunityWithTrackingDTO,
   StudentOpportunityDTO,
   OpportunityStatus,
 } from "@/types/api.types";
@@ -20,6 +21,11 @@ export interface CreateOpportunityInput {
   description?: string | null;
   applicationUrl?: string | null;
   deadline?: string | null;
+}
+
+export interface OpportunityFilter {
+  search?: string;
+  activeOnly?: boolean;
 }
 
 export interface TrackedOpportunityDetail {
@@ -39,28 +45,42 @@ export class OpportunityRepository {
   }
 
   // ==========================================
-  // Opportunities
+  // Opportunities (Master Catalog)
   // ==========================================
 
-  async listOpportunities(filter?: { search?: string }): Promise<OpportunityDTO[]> {
+  /**
+   * Lists master opportunities with optional multi-field search and active deadline filtering.
+   */
+  async listOpportunities(filter?: OpportunityFilter): Promise<OpportunityDTO[]> {
     const client = this.getDb();
-    Logger.debug("OpportunityRepository.listOpportunities", filter);
+    Logger.debug("OpportunityRepository.listOpportunities", { ...filter });
 
-    let query = client.select().from(schema.opportunities);
-    if (filter?.search) {
-      const term = `%${filter.search}%`;
-      query = client
-        .select()
-        .from(schema.opportunities)
-        .where(
-          or(
-            ilike(schema.opportunities.title, term),
-            ilike(schema.opportunities.company, term)
-          )
-        ) as typeof query;
+    const conditions = [];
+
+    if (filter?.search?.trim()) {
+      const term = `%${filter.search.trim()}%`;
+      conditions.push(
+        or(
+          ilike(schema.opportunities.title, term),
+          ilike(schema.opportunities.company, term),
+          ilike(schema.opportunities.description, term)
+        )
+      );
     }
 
-    const records = await query;
+    if (filter?.activeOnly) {
+      conditions.push(
+        or(
+          isNull(schema.opportunities.deadline),
+          gte(schema.opportunities.deadline, sql`CURRENT_DATE`)
+        )
+      );
+    }
+
+    const query = client.select().from(schema.opportunities);
+    const records = conditions.length > 0
+      ? await query.where(and(...conditions))
+      : await query;
 
     return records.map((r) => ({
       opportunityId: r.opportunityId,
@@ -72,6 +92,77 @@ export class OpportunityRepository {
     }));
   }
 
+  /**
+   * Lists all opportunities with the current student's tracking status in a single LEFT JOIN (0 N+1 queries).
+   */
+  async listOpportunitiesWithTrackingStatus(
+    userId: number,
+    filter?: OpportunityFilter
+  ): Promise<OpportunityWithTrackingDTO[]> {
+    const client = this.getDb();
+    Logger.debug("OpportunityRepository.listOpportunitiesWithTrackingStatus", { userId, ...filter });
+
+    const conditions = [];
+
+    if (filter?.search?.trim()) {
+      const term = `%${filter.search.trim()}%`;
+      conditions.push(
+        or(
+          ilike(schema.opportunities.title, term),
+          ilike(schema.opportunities.company, term),
+          ilike(schema.opportunities.description, term)
+        )
+      );
+    }
+
+    if (filter?.activeOnly) {
+      conditions.push(
+        or(
+          isNull(schema.opportunities.deadline),
+          gte(schema.opportunities.deadline, sql`CURRENT_DATE`)
+        )
+      );
+    }
+
+    const baseQuery = client
+      .select({
+        opportunityId: schema.opportunities.opportunityId,
+        title: schema.opportunities.title,
+        company: schema.opportunities.company,
+        description: schema.opportunities.description,
+        applicationUrl: schema.opportunities.applicationUrl,
+        deadline: schema.opportunities.deadline,
+        status: schema.studentOpportunities.status,
+        savedAt: schema.studentOpportunities.savedAt,
+      })
+      .from(schema.opportunities)
+      .leftJoin(
+        schema.studentOpportunities,
+        and(
+          eq(schema.opportunities.opportunityId, schema.studentOpportunities.opportunityId),
+          eq(schema.studentOpportunities.userId, userId)
+        )
+      );
+
+    const records = conditions.length > 0
+      ? await baseQuery.where(and(...conditions))
+      : await baseQuery;
+
+    return records.map((r) => ({
+      opportunityId: r.opportunityId,
+      title: r.title,
+      company: r.company,
+      description: r.description,
+      applicationUrl: r.applicationUrl,
+      deadline: r.deadline,
+      trackingStatus: (r.status as OpportunityStatus) || null,
+      savedAt: r.savedAt || null,
+    }));
+  }
+
+  /**
+   * Retrieves a single opportunity by its primary key.
+   */
   async getOpportunityById(opportunityId: number): Promise<OpportunityDTO | null> {
     const client = this.getDb();
     Logger.debug("OpportunityRepository.getOpportunityById", { opportunityId });
@@ -93,6 +184,9 @@ export class OpportunityRepository {
     };
   }
 
+  /**
+   * Creates a new master opportunity record.
+   */
   async createOpportunity(input: CreateOpportunityInput): Promise<OpportunityDTO> {
     const client = this.getDb();
     Logger.info("OpportunityRepository.createOpportunity", { title: input.title });
@@ -118,12 +212,28 @@ export class OpportunityRepository {
     };
   }
 
+  /**
+   * Deletes a master opportunity and relies on database ON DELETE CASCADE for student_opportunities.
+   */
+  async deleteOpportunity(opportunityId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("OpportunityRepository.deleteOpportunity", { opportunityId });
+
+    const [deleted] = await client
+      .delete(schema.opportunities)
+      .where(eq(schema.opportunities.opportunityId, opportunityId))
+      .returning();
+
+    return !!deleted;
+  }
+
   // ==========================================
   // Student Opportunities Tracking
   // ==========================================
 
   /**
    * Tracks or updates application status for a student (saved, applied, shortlisted, rejected).
+   * Scoped strictly by userId.
    */
   async trackOpportunity(
     userId: number,
@@ -158,7 +268,29 @@ export class OpportunityRepository {
   }
 
   /**
+   * Untracks/removes an opportunity tracking entry for a student.
+   * Scoped strictly by userId and opportunityId.
+   */
+  async untrackOpportunity(userId: number, opportunityId: number): Promise<boolean> {
+    const client = this.getDb();
+    Logger.info("OpportunityRepository.untrackOpportunity", { userId, opportunityId });
+
+    const result = await client
+      .delete(schema.studentOpportunities)
+      .where(
+        and(
+          eq(schema.studentOpportunities.userId, userId),
+          eq(schema.studentOpportunities.opportunityId, opportunityId)
+        )
+      )
+      .returning();
+
+    return result.length > 0;
+  }
+
+  /**
    * Retrieves all opportunities tracked by a user with full opportunity details.
+   * Scoped strictly by userId.
    */
   async getUserTrackedOpportunities(
     userId: number,
@@ -207,6 +339,7 @@ export class OpportunityRepository {
 
   /**
    * Retrieves tracking status for a specific student and opportunity.
+   * Scoped strictly by userId.
    */
   async getStudentOpportunityStatus(
     userId: number,
