@@ -1,0 +1,53 @@
+/**
+ * @file app/api/roadmaps/[id]/route.ts
+ * @description Next.js 16 Route Handler for retrieving a specific Roadmap and its ordered nodes.
+ * @purpose Connects GET requests to RoadmapService with session authentication and parameter validation.
+ * @security Strictly enforces getAuthenticatedUser() session verification.
+ */
+
+import { NextRequest } from "next/server";
+import { roadmapService } from "@/services/roadmap.service";
+import { getAuthenticatedUser } from "@/lib/auth";
+import { ResponseBuilder } from "@/utils/api-response";
+import { Logger } from "@/lib/logger";
+
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
+
+/**
+ * GET /api/roadmaps/[id]
+ * Retrieves roadmap metadata alongside all ordered nodes.
+ */
+export async function GET(request: NextRequest, { params }: RouteParams) {
+  try {
+    const session = getAuthenticatedUser(request);
+    if (!session) {
+      return ResponseBuilder.error("Unauthorized: Authentication required.", 401, "UNAUTHORIZED");
+    }
+
+    const { id } = await params;
+    const roadmapId = parseInt(id, 10);
+
+    if (isNaN(roadmapId) || !Number.isInteger(roadmapId) || roadmapId <= 0) {
+      return ResponseBuilder.error("Validation Error: Roadmap ID must be a positive integer.", 400, "VALIDATION_ERROR");
+    }
+
+    Logger.info("GET /api/roadmaps/[id] requested", { userId: session.userId, roadmapId });
+    const roadmapData = await roadmapService.getRoadmapWithNodes(roadmapId);
+
+    return ResponseBuilder.success(roadmapData, "Roadmap details retrieved successfully.");
+  } catch (error: unknown) {
+    Logger.error("GET /api/roadmaps/[id] failed", error);
+    const message = error instanceof Error ? error.message : "Internal Server Error";
+
+    if (message.startsWith("Not Found Error")) {
+      return ResponseBuilder.error(message, 404, "NOT_FOUND");
+    }
+    if (message.startsWith("Validation Error")) {
+      return ResponseBuilder.error(message, 400, "VALIDATION_ERROR");
+    }
+
+    return ResponseBuilder.error("An unexpected error occurred while retrieving roadmap details.", 500, "INTERNAL_ERROR");
+  }
+}
