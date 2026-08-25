@@ -1,11 +1,13 @@
 /**
  * @file app/api/profile/route.ts
- * @description Next.js 16 Route Handler for Student Profile operations (GET, POST).
- * @purpose Connects HTTP requests to ProfileService without embedding business logic.
+ * @description Next.js 16 Route Handler for Student Profile operations (GET, POST, PATCH).
+ * @purpose Connects HTTP requests to ProfileService using authenticated session identity.
+ * @security Strictly enforces getAuthenticatedUser() session verification and eliminates hardcoded user IDs.
  */
 
 import { NextRequest } from "next/server";
 import { profileService } from "@/services/profile.service";
+import { getAuthenticatedUser } from "@/lib/auth";
 import { ResponseBuilder } from "@/utils/api-response";
 import { Logger } from "@/lib/logger";
 
@@ -13,22 +15,30 @@ import { Logger } from "@/lib/logger";
  * GET /api/profile
  * Retrieves profile for the currently authenticated student.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    // TODO: Extract authenticated User ID from request context (Auth Session)
-    const demoUserId = 1;
-
-    Logger.info("GET /api/profile requested", { userId: demoUserId });
-    const profile = await profileService.getStudentProfile(demoUserId);
-
-    if (!profile) {
-      return ResponseBuilder.error("Student profile not found", 404, "NOT_FOUND");
+    const session = getAuthenticatedUser(request);
+    if (!session) {
+      return ResponseBuilder.error("Unauthorized: Authentication required.", 401, "UNAUTHORIZED");
     }
 
-    return ResponseBuilder.success(profile, "Profile retrieved successfully");
-  } catch (error) {
+    Logger.info("GET /api/profile requested", { userId: session.userId });
+    const profile = await profileService.getStudentProfile(session.userId);
+
+    if (!profile) {
+      return ResponseBuilder.error("Student profile not found.", 404, "NOT_FOUND");
+    }
+
+    return ResponseBuilder.success(profile, "Profile retrieved successfully.");
+  } catch (error: unknown) {
     Logger.error("GET /api/profile failed", error);
-    return ResponseBuilder.error("Internal Server Error", 500, "INTERNAL_ERROR");
+    const message = error instanceof Error ? error.message : "Internal Server Error";
+
+    if (message.startsWith("Not Found Error")) {
+      return ResponseBuilder.error(message, 404, "NOT_FOUND");
+    }
+
+    return ResponseBuilder.error("An unexpected error occurred.", 500, "INTERNAL_ERROR");
   }
 }
 
@@ -38,18 +48,63 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    const session = getAuthenticatedUser(request);
+    if (!session) {
+      return ResponseBuilder.error("Unauthorized: Authentication required.", 401, "UNAUTHORIZED");
+    }
+
     const body = await request.json();
 
-    // TODO: Extract authenticated User ID from Auth context
-    const demoUserId = 1;
+    Logger.info("POST /api/profile requested", { userId: session.userId });
+    const newProfile = await profileService.setupStudentProfile(session.userId, body);
 
-    Logger.info("POST /api/profile requested", { userId: demoUserId });
-    const newProfile = await profileService.setupStudentProfile(demoUserId, body);
-
-    return ResponseBuilder.success(newProfile, "Profile created successfully", 201);
+    return ResponseBuilder.success(newProfile, "Profile created successfully.", 201);
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : "Invalid request data";
     Logger.error("POST /api/profile failed", error);
-    return ResponseBuilder.error(errorMessage, 400, "BAD_REQUEST");
+    const message = error instanceof Error ? error.message : "Invalid request data";
+
+    if (message.startsWith("Conflict Error") || message.includes("already exists")) {
+      return ResponseBuilder.error(message, 409, "CONFLICT");
+    }
+    if (message.startsWith("Validation Error")) {
+      return ResponseBuilder.error(message, 400, "VALIDATION_ERROR");
+    }
+    if (message.startsWith("Not Found Error")) {
+      return ResponseBuilder.error(message, 404, "NOT_FOUND");
+    }
+
+    return ResponseBuilder.error("An unexpected error occurred while creating profile.", 500, "INTERNAL_ERROR");
+  }
+}
+
+/**
+ * PATCH /api/profile
+ * Partially updates an existing student profile for the authenticated student.
+ */
+export async function PATCH(request: NextRequest) {
+  try {
+    const session = getAuthenticatedUser(request);
+    if (!session) {
+      return ResponseBuilder.error("Unauthorized: Authentication required.", 401, "UNAUTHORIZED");
+    }
+
+    const body = await request.json();
+
+    Logger.info("PATCH /api/profile requested", { userId: session.userId });
+    const updatedProfile = await profileService.updateStudentProfile(session.userId, body);
+
+    return ResponseBuilder.success(updatedProfile, "Profile updated successfully.");
+  } catch (error: unknown) {
+    Logger.error("PATCH /api/profile failed", error);
+    const message = error instanceof Error ? error.message : "Invalid update data";
+
+    if (message.startsWith("Validation Error")) {
+      return ResponseBuilder.error(message, 400, "VALIDATION_ERROR");
+    }
+    if (message.startsWith("Not Found Error")) {
+      return ResponseBuilder.error(message, 404, "NOT_FOUND");
+    }
+
+    return ResponseBuilder.error("An unexpected error occurred while updating profile.", 500, "INTERNAL_ERROR");
   }
 }
