@@ -1,51 +1,51 @@
+/**
+ * @file app/onboarding/page.tsx
+ * @description 60-Second Freshers Onboarding Flow for CampusOS.
+ * @purpose Collects student college, branch, semester, goals & preferences, and persists profile via /api/profile and /api/settings.
+ */
+
 "use client";
 
-import React, { useState } from "react";
-import Link from "next/link";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth/auth-provider";
+import { ProtectedRoute } from "@/components/auth/protected-route";
+import { CollegeDTO, CourseDTO } from "@/types/api.types";
 import {
   GraduationCap,
   Code,
   BrainCircuit,
-  CheckCircle2,
   ChevronRight,
   ChevronLeft,
   Rocket,
   Check,
   Zap,
   ArrowRight,
-  Globe,
-  Flame
+  Flame,
+  Loader2,
+  AlertCircle
 } from "lucide-react";
 
-// Onboarding Data Models (9 Questions)
-const collegesList = [
-  "RV College of Engineering (RVCE), Bengaluru",
-  "BMS College of Engineering (BMSCE), Bengaluru",
-  "PES University, Bengaluru",
-  "MS Ramaiah Institute of Technology (MSRIT), Bengaluru",
-  "Nitte Meenakshi Institute of Technology (NMIT), Bengaluru",
-  "KLS Gogte Institute of Technology (GIT), Belagavi",
-  "The National Institute of Engineering (NIE), Mysore",
-  "Siddaganga Institute of Technology (SIT), Tumakuru",
-  "SJCE (JSSSTU), Mysore",
-  "VTU Main Campus, Belagavi",
-  "BMSIT & Management, Bengaluru",
-  "Bangalore Institute of Technology (BIT), Bengaluru",
-  "Dayananda Sagar College of Engineering (DSCE), Bengaluru",
-  "Sir M. Visvesvaraya Institute of Technology (SIR MVIT), Bengaluru",
-  "KLE Technological University, Hubballi",
-  "Other Engineering College in Karnataka",
+// Fallback academic data while API loads
+const defaultColleges: { collegeId: number; collegeName: string; location: string | null }[] = [
+  { collegeId: 1, collegeName: "RV College of Engineering (RVCE)", location: "Bengaluru" },
+  { collegeId: 2, collegeName: "BMS College of Engineering (BMSCE)", location: "Bengaluru" },
+  { collegeId: 3, collegeName: "PES University (PESU)", location: "Bengaluru" },
+  { collegeId: 4, collegeName: "MS Ramaiah Institute of Technology (MSRIT)", location: "Bengaluru" },
+  { collegeId: 5, collegeName: "The National Institute of Engineering (NIE)", location: "Mysore" },
+  { collegeId: 6, collegeName: "KLS Gogte Institute of Technology (GIT)", location: "Belagavi" },
+  { collegeId: 7, collegeName: "Siddaganga Institute of Technology (SIT)", location: "Tumakuru" },
+  { collegeId: 8, collegeName: "Dayananda Sagar College of Engineering (DSCE)", location: "Bengaluru" },
 ];
 
-const branchesList = [
-  { id: "cse", label: "Computer Science & Engg (CSE)", category: "Software" },
-  { id: "ise", label: "Information Science (ISE)", category: "Software" },
-  { id: "aiml", label: "AI & Machine Learning (AI&ML / AI&DS)", category: "Emerging Tech" },
-  { id: "ece", label: "Electronics & Comm. (ECE)", category: "Circuit Branch" },
-  { id: "eee", label: "Electrical & Electronics (EEE)", category: "Circuit Branch" },
-  { id: "mech", label: "Mechanical Engineering", category: "Core" },
-  { id: "civil", label: "Civil Engineering", category: "Core" },
-  { id: "other", label: "Biotech / Chemical / Other", category: "Interdisciplinary" },
+const defaultCourses: { courseId: number; courseName: string; courseCode: string | null; schemeId?: number }[] = [
+  { courseId: 1, courseName: "Computer Science & Engineering", courseCode: "CSE" },
+  { courseId: 2, courseName: "Information Science & Engineering", courseCode: "ISE" },
+  { courseId: 3, courseName: "Artificial Intelligence & Machine Learning", courseCode: "AIML" },
+  { courseId: 4, courseName: "Electronics & Communication Engineering", courseCode: "ECE" },
+  { courseId: 5, courseName: "Electrical & Electronics Engineering", courseCode: "EEE" },
+  { courseId: 6, courseName: "Mechanical Engineering", courseCode: "MECH" },
+  { courseId: 7, courseName: "Civil Engineering", courseCode: "CIVIL" },
 ];
 
 const semesterList = [
@@ -136,13 +136,20 @@ const interestsList = [
   { id: "opensource", label: "Open Source & Systems", tag: "Community" },
 ];
 
-export default function FreshersOnboarding() {
+function OnboardingContent() {
+  const router = useRouter();
+  const { user, profile, refreshSession } = useAuth();
+
   const [step, setStep] = useState(1);
   const totalSteps = 9;
 
-  // Form States (9 Questions)
-  const [college, setCollege] = useState("");
-  const [branch, setBranch] = useState("cse");
+  // Dynamic API state
+  const [colleges, setColleges] = useState<CollegeDTO[]>([]);
+  const [courses, setCourses] = useState<CourseDTO[]>([]);
+
+  // Form States
+  const [collegeId, setCollegeId] = useState<number>(1);
+  const [courseId, setCourseId] = useState<number>(1);
   const [semester, setSemester] = useState<number>(1);
   const [evalType, setEvalType] = useState("vtu");
   const [careerGoal, setCareerGoal] = useState("sde");
@@ -152,6 +159,49 @@ export default function FreshersOnboarding() {
   const [selectedInterests, setSelectedInterests] = useState<string[]>(["web", "ai"]);
 
   const [isFinished, setIsFinished] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch live colleges and courses on mount
+  useEffect(() => {
+    const fetchAcademicData = async () => {
+      try {
+        const [collegesRes, coursesRes] = await Promise.all([
+          fetch("/api/academics/colleges", { credentials: "include" }),
+          fetch("/api/academics/courses", { credentials: "include" }),
+        ]);
+
+        if (collegesRes.ok) {
+          const colJson = await collegesRes.json();
+          if (colJson.success && Array.isArray(colJson.data) && colJson.data.length > 0) {
+            setColleges(colJson.data);
+            setCollegeId(profile?.collegeId || colJson.data[0].collegeId);
+          }
+        }
+
+        if (coursesRes.ok) {
+          const courJson = await coursesRes.json();
+          if (courJson.success && Array.isArray(courJson.data) && courJson.data.length > 0) {
+            setCourses(courJson.data);
+            setCourseId(profile?.courseId || courJson.data[0].courseId);
+          }
+        }
+      } catch {
+        // Fallback to default lists
+      }
+    };
+
+    fetchAcademicData();
+  }, [profile]);
+
+  // Pre-populate if profile already exists
+  useEffect(() => {
+    if (profile) {
+      if (profile.collegeId) setCollegeId(profile.collegeId);
+      if (profile.courseId) setCourseId(profile.courseId);
+      if (profile.semester) setSemester(profile.semester);
+    }
+  }, [profile]);
 
   const toggleInterest = (id: string) => {
     if (selectedInterests.includes(id)) {
@@ -175,7 +225,83 @@ export default function FreshersOnboarding() {
     }
   };
 
+  /**
+   * Persists student profile and settings, refreshes global session state, and redirects to dashboard.
+   */
+  const handleSaveAndLaunch = async () => {
+    setIsSaving(true);
+    setError(null);
+
+    try {
+      // Choose POST (if no profile exists) vs PATCH (if profile already exists)
+      const method = profile ? "PATCH" : "POST";
+
+      const profilePayload = {
+        firstName: profile?.firstName || user?.email?.split("@")[0] || "Student",
+        lastName: profile?.lastName || undefined,
+        collegeId: Number(collegeId),
+        courseId: Number(courseId),
+        semester: Number(semester),
+      };
+
+      const profileRes = await fetch("/api/profile", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(profilePayload),
+      });
+
+      if (!profileRes.ok) {
+        // If profile was initialized concurrently, gracefully fallback to PATCH
+        if (profileRes.status === 409) {
+          const patchRes = await fetch("/api/profile", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(profilePayload),
+          });
+          if (!patchRes.ok) {
+            const errJson = await patchRes.json();
+            throw new Error(errJson.error?.message || errJson.message || "Failed to update profile.");
+          }
+        } else {
+          const errJson = await profileRes.json();
+          throw new Error(errJson.error?.message || errJson.message || "Failed to save profile.");
+        }
+      }
+
+      // Persist language and theme preferences
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          language: prefLang,
+          theme: "dark",
+        }),
+      });
+
+      // Hydrate global session state
+      await refreshSession();
+
+      // Navigate to Mission Control
+      router.push("/#demo");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "An error occurred while saving your profile.";
+      setError(msg);
+      setIsSaving(false);
+    }
+  };
+
   const progressPercentage = Math.round((step / totalSteps) * 100);
+
+  const displayColleges = colleges.length > 0 ? colleges : defaultColleges;
+  const displayCourses = courses.length > 0 ? courses : defaultCourses;
+
+  const currentCollegeName =
+    displayColleges.find((c) => c.collegeId === collegeId)?.collegeName || "Karnataka Engineering College";
+  const currentCourseName =
+    displayCourses.find((c) => c.courseId === courseId)?.courseName || "Computer Science & Engineering";
 
   return (
     <main className="min-h-screen bg-[#08090e] text-[#f3f4f6] selection:bg-purple-500/30 selection:text-purple-200 flex flex-col justify-between relative overflow-x-hidden">
@@ -238,10 +364,17 @@ export default function FreshersOnboarding() {
               <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
                 Welcome to Mission Control!
               </h1>
-              <p className="text-xs sm:text-sm text-gray-300 max-w-xs mx-auto">
-                We generated your custom 1st-year workspace for {college || "your Karnataka college"}.
+              <p className="text-xs sm:text-sm text-gray-300 max-w-sm mx-auto">
+                Your engineering workspace for <span className="text-purple-300 font-semibold">{currentCollegeName}</span> is configured.
               </p>
             </div>
+
+            {error && (
+              <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300 text-left">
+                <AlertCircle className="size-4 shrink-0 text-rose-400" />
+                <span>{error}</span>
+              </div>
+            )}
 
             {/* Generated Profile Summary */}
             <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left space-y-3 text-xs">
@@ -251,33 +384,43 @@ export default function FreshersOnboarding() {
                   {evalType} Scheme
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2 text-gray-300">
+              <div className="grid grid-cols-2 gap-3 text-gray-300">
                 <div>
-                  <span className="text-gray-500 block">Branch & Sem</span>
-                  <strong className="text-white">{branch.toUpperCase()} • Sem {semester}</strong>
+                  <span className="text-gray-500 block text-[10px]">College</span>
+                  <strong className="text-white block truncate">{currentCollegeName}</strong>
                 </div>
                 <div>
-                  <span className="text-gray-500 block">Daily Study Goal</span>
-                  <strong className="text-cyan-400">{studyTimeOptions.find(s => s.id === studyTime)?.title}</strong>
+                  <span className="text-gray-500 block text-[10px]">Branch & Semester</span>
+                  <strong className="text-white block truncate">{currentCourseName} • Sem {semester}</strong>
                 </div>
                 <div>
-                  <span className="text-gray-500 block">Target Career</span>
-                  <strong className="text-purple-400">{careerGoals.find(c => c.id === careerGoal)?.title}</strong>
+                  <span className="text-gray-500 block text-[10px]">Daily Study Goal</span>
+                  <strong className="text-cyan-400">{studyTimeOptions.find((s) => s.id === studyTime)?.title}</strong>
                 </div>
                 <div>
-                  <span className="text-gray-500 block">Language</span>
-                  <strong className="text-amber-400">{languagesList.find(l => l.id === prefLang)?.label}</strong>
+                  <span className="text-gray-500 block text-[10px]">Target Career</span>
+                  <strong className="text-purple-400">{careerGoals.find((c) => c.id === careerGoal)?.title}</strong>
                 </div>
               </div>
             </div>
 
-            <Link
-              href="/#demo"
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 text-sm font-bold text-white shadow-lg shadow-purple-600/30 hover:scale-[1.02] transition"
+            <button
+              onClick={handleSaveAndLaunch}
+              disabled={isSaving}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 text-sm font-bold text-white shadow-lg shadow-purple-600/30 hover:scale-[1.02] active:scale-98 transition cursor-pointer disabled:opacity-50"
             >
-              Enter Mission Control
-              <ArrowRight className="size-4" />
-            </Link>
+              {isSaving ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  <span>Saving Profile to CampusOS...</span>
+                </>
+              ) : (
+                <>
+                  <span>Enter Mission Control</span>
+                  <ArrowRight className="size-4" />
+                </>
+              )}
+            </button>
           </div>
         ) : (
           /* 9 QUESTION CARDS */
@@ -290,22 +433,32 @@ export default function FreshersOnboarding() {
                   <h1 className="text-xl sm:text-2xl font-extrabold text-white">Which college did you join?</h1>
                   <p className="text-xs text-gray-400">Unlocks campus-specific senior playbooks and viva cheat sheets.</p>
                 </div>
-                <select
-                  value={college}
-                  onChange={(e) => setCollege(e.target.value)}
-                  className="w-full rounded-xl border border-white/15 bg-black/60 px-4 py-3.5 text-sm text-white focus:border-purple-500 focus:outline-none"
-                >
-                  <option value="">Search / Choose Karnataka College...</option>
-                  {collegesList.map((col, idx) => (
-                    <option key={idx} value={col} className="bg-gray-900 text-gray-200">
-                      {col}
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                  {displayColleges.map((col) => {
+                    const isSelected = collegeId === col.collegeId;
+                    return (
+                      <div
+                        key={col.collegeId}
+                        onClick={() => setCollegeId(col.collegeId)}
+                        className={`p-3.5 rounded-xl border transition cursor-pointer flex items-center justify-between ${
+                          isSelected
+                            ? "bg-purple-600/20 border-purple-500 text-white font-bold"
+                            : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        <div className="space-y-0.5">
+                          <span className="text-xs sm:text-sm block">{col.collegeName}</span>
+                          <span className="text-[10px] text-gray-400 block">{col.location || "Karnataka"}</span>
+                        </div>
+                        {isSelected && <Check className="size-4 text-purple-400 shrink-0" />}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
-            {/* Q2: BRANCH */}
+            {/* Q2: BRANCH / COURSE */}
             {step === 2 && (
               <div className="space-y-4">
                 <div className="space-y-1">
@@ -313,21 +466,24 @@ export default function FreshersOnboarding() {
                   <h1 className="text-xl sm:text-2xl font-extrabold text-white">What is your engineering branch?</h1>
                   <p className="text-xs text-gray-400">Maps your exact subject modules and lab requirements.</p>
                 </div>
-                <div className="grid grid-cols-1 gap-2 max-h-[300px] overflow-y-auto pr-1">
-                  {branchesList.map((b) => {
-                    const isSelected = branch === b.id;
+                <div className="grid grid-cols-1 gap-2 max-h-[320px] overflow-y-auto pr-1">
+                  {displayCourses.map((cour) => {
+                    const isSelected = courseId === cour.courseId;
                     return (
                       <div
-                        key={b.id}
-                        onClick={() => setBranch(b.id)}
+                        key={cour.courseId}
+                        onClick={() => setCourseId(cour.courseId)}
                         className={`p-3 rounded-xl border transition cursor-pointer flex items-center justify-between ${
                           isSelected
                             ? "bg-purple-600/20 border-purple-500 text-white font-bold"
                             : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
                         }`}
                       >
-                        <span className="text-xs sm:text-sm">{b.label}</span>
-                        {isSelected && <Check className="size-4 text-purple-400" />}
+                        <div className="space-y-0.5">
+                          <span className="text-xs sm:text-sm block">{cour.courseName}</span>
+                          <span className="text-[10px] text-gray-400 block">{cour.courseCode || "Engineering"}</span>
+                        </div>
+                        {isSelected && <Check className="size-4 text-purple-400 shrink-0" />}
                       </div>
                     );
                   })}
@@ -352,7 +508,7 @@ export default function FreshersOnboarding() {
                         onClick={() => setSemester(s.sem)}
                         className={`p-3 rounded-xl border transition cursor-pointer space-y-1 ${
                           isSelected
-                            ? "bg-purple-600/20 border-purple-500 text-white"
+                            ? "bg-purple-600/20 border-purple-500 text-white font-bold"
                             : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
                         }`}
                       >
@@ -365,32 +521,34 @@ export default function FreshersOnboarding() {
               </div>
             )}
 
-            {/* Q4: VTU OR AUTONOMOUS */}
+            {/* Q4: EVALUATION SCHEME */}
             {step === 4 && (
               <div className="space-y-4">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-purple-400 uppercase tracking-wider">Question 4 of 9</span>
-                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">Is your college VTU or Autonomous?</h1>
-                  <p className="text-xs text-gray-400">Sets up your exact CIE evaluation and 75% attendance radar.</p>
+                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">Evaluation & scheme type?</h1>
+                  <p className="text-xs text-gray-400">Adjusts internal CIE marks rubrics and question paper formats.</p>
                 </div>
                 <div className="space-y-2.5">
-                  {evaluationTypes.map((t) => {
-                    const isSelected = evalType === t.id;
+                  {evaluationTypes.map((ev) => {
+                    const isSelected = evalType === ev.id;
                     return (
                       <div
-                        key={t.id}
-                        onClick={() => setEvalType(t.id)}
-                        className={`p-4 rounded-xl border transition cursor-pointer flex items-start justify-between ${
+                        key={ev.id}
+                        onClick={() => setEvalType(ev.id)}
+                        className={`p-4 rounded-2xl border transition cursor-pointer space-y-1.5 ${
                           isSelected
                             ? "bg-purple-600/20 border-purple-500 text-white"
                             : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
                         }`}
                       >
-                        <div>
-                          <h3 className="text-sm font-bold text-white">{t.title}</h3>
-                          <p className="text-xs text-gray-400 mt-0.5">{t.desc}</p>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-bold text-white">{ev.title}</span>
+                          <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded font-bold uppercase">
+                            {ev.badge}
+                          </span>
                         </div>
-                        {isSelected && <CheckCircle2 className="size-5 text-purple-400 shrink-0 mt-0.5" />}
+                        <p className="text-xs text-gray-400 leading-relaxed">{ev.desc}</p>
                       </div>
                     );
                   })}
@@ -403,31 +561,30 @@ export default function FreshersOnboarding() {
               <div className="space-y-4">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-purple-400 uppercase tracking-wider">Question 5 of 9</span>
-                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">What is your primary career goal?</h1>
-                  <p className="text-xs text-gray-400">Tailors your engineering skill roadmap and interview tracks.</p>
+                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">What is your primary goal?</h1>
+                  <p className="text-xs text-gray-400">Personalizes your Semester 1 to 8 visual milestone tree.</p>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
                   {careerGoals.map((cg) => {
-                    const IconComp = cg.icon;
                     const isSelected = careerGoal === cg.id;
+                    const IconComponent = cg.icon;
                     return (
                       <div
                         key={cg.id}
                         onClick={() => setCareerGoal(cg.id)}
-                        className={`p-3.5 rounded-xl border transition cursor-pointer flex items-center justify-between ${
+                        className={`p-3.5 rounded-xl border transition cursor-pointer flex items-center gap-3.5 ${
                           isSelected
                             ? "bg-purple-600/20 border-purple-500 text-white"
                             : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
                         }`}
                       >
-                        <div className="flex items-center gap-3">
-                          <IconComp className={`size-5 ${isSelected ? "text-purple-400" : "text-gray-400"}`} />
-                          <div>
-                            <h3 className="text-xs sm:text-sm font-bold text-white">{cg.title}</h3>
-                            <p className="text-[11px] text-gray-400">{cg.desc}</p>
-                          </div>
+                        <div className="size-9 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
+                          <IconComponent className="size-4" />
                         </div>
-                        {isSelected && <Check className="size-4 text-purple-400 shrink-0" />}
+                        <div className="space-y-0.5">
+                          <span className="text-xs sm:text-sm font-bold text-white block">{cg.title}</span>
+                          <p className="text-[11px] text-gray-400 leading-tight">{cg.desc}</p>
+                        </div>
                       </div>
                     );
                   })}
@@ -435,33 +592,33 @@ export default function FreshersOnboarding() {
               </div>
             )}
 
-            {/* Q6: PROGRAMMING EXPERIENCE */}
+            {/* Q6: PROGRAMMING LEVEL */}
             {step === 6 && (
               <div className="space-y-4">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-purple-400 uppercase tracking-wider">Question 6 of 9</span>
-                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">What is your programming level?</h1>
-                  <p className="text-xs text-gray-400">Ensures we start you at the perfect skill baseline.</p>
+                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">Coding experience level?</h1>
+                  <p className="text-xs text-gray-400">We will tailor your daily programming exercises accordingly.</p>
                 </div>
                 <div className="space-y-2">
-                  {programmingLevels.map((pl) => {
-                    const isSelected = progLevel === pl.id;
+                  {programmingLevels.map((lvl) => {
+                    const isSelected = progLevel === lvl.id;
                     return (
                       <div
-                        key={pl.id}
-                        onClick={() => setProgLevel(pl.id)}
+                        key={lvl.id}
+                        onClick={() => setProgLevel(lvl.id)}
                         className={`p-3.5 rounded-xl border transition cursor-pointer flex items-center justify-between ${
                           isSelected
                             ? "bg-purple-600/20 border-purple-500 text-white"
                             : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
                         }`}
                       >
-                        <div>
-                          <h3 className="text-xs sm:text-sm font-bold text-white">{pl.title}</h3>
-                          <p className="text-[11px] text-gray-400">{pl.desc}</p>
+                        <div className="space-y-0.5">
+                          <span className="text-xs sm:text-sm font-bold text-white block">{lvl.title}</span>
+                          <p className="text-[11px] text-gray-400">{lvl.desc}</p>
                         </div>
                         <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded font-bold">
-                          {pl.xp}
+                          {lvl.xp}
                         </span>
                       </div>
                     );
@@ -475,8 +632,8 @@ export default function FreshersOnboarding() {
               <div className="space-y-4">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-purple-400 uppercase tracking-wider">Question 7 of 9</span>
-                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">Preferred language for guidance?</h1>
-                  <p className="text-xs text-gray-400">Choose your language for AI mentor explanations & senior notes.</p>
+                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">Preferred guidance language?</h1>
+                  <p className="text-xs text-gray-400">AI Senior Mentor can explain tough VTU derivations in your native language.</p>
                 </div>
                 <div className="space-y-2.5">
                   {languagesList.map((lang) => {
@@ -485,16 +642,13 @@ export default function FreshersOnboarding() {
                       <div
                         key={lang.id}
                         onClick={() => setPrefLang(lang.id)}
-                        className={`p-4 rounded-xl border transition cursor-pointer flex items-center justify-between ${
+                        className={`p-3.5 rounded-xl border transition cursor-pointer flex items-center justify-between ${
                           isSelected
-                            ? "bg-purple-600/20 border-purple-500 text-white font-bold"
+                            ? "bg-purple-600/20 border-purple-500 text-white"
                             : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
                         }`}
                       >
-                        <div className="flex items-center gap-3">
-                          <Globe className={`size-5 ${isSelected ? "text-purple-400" : "text-gray-400"}`} />
-                          <span className="text-sm">{lang.native}</span>
-                        </div>
+                        <span className="text-xs sm:text-sm font-semibold">{lang.native}</span>
                         {isSelected && <Check className="size-4 text-purple-400" />}
                       </div>
                     );
@@ -508,7 +662,7 @@ export default function FreshersOnboarding() {
               <div className="space-y-4">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-purple-400 uppercase tracking-wider">Question 8 of 9</span>
-                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">Daily study time commitment?</h1>
+                  <h1 className="text-xl sm:text-2xl font-extrabold text-white">Daily study commitment?</h1>
                   <p className="text-xs text-gray-400">Configures your daily Mission Control task size.</p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -536,7 +690,7 @@ export default function FreshersOnboarding() {
               </div>
             )}
 
-            {/* Q9: INTERESTS */}
+            {/* Q9: TECH INTERESTS */}
             {step === 9 && (
               <div className="space-y-4">
                 <div className="space-y-1">
@@ -588,5 +742,13 @@ export default function FreshersOnboarding() {
         CampusOS 60s Freshers Onboarding • Duolingo Momentum + Notion Calm
       </footer>
     </main>
+  );
+}
+
+export default function FreshersOnboarding() {
+  return (
+    <ProtectedRoute>
+      <OnboardingContent />
+    </ProtectedRoute>
   );
 }
