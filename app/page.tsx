@@ -1,6 +1,22 @@
+/**
+ * @file app/page.tsx
+ * @description CampusOS Mission Control & Interactive Student Operating System.
+ * @purpose Serves as both the landing page for prospective students and interactive Mission Control for authenticated users.
+ * @features Live attendance radar, 75% Bunk Defense calculator, CIE marks, syllabus tracker, senior playbooks, and quick attendance logging.
+ */
+
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import Link from "next/link";
+import { Navbar } from "@/components/layout/navbar";
+import { useAuth } from "@/components/auth/auth-provider";
+import {
+  AttendanceSummaryWithCourseDTO,
+  CourseDTO,
+  StudentCieMarkWithCourseDTO,
+  VivaQuestionDTO
+} from "@/types/api.types";
 import {
   BookOpen,
   CheckCircle2,
@@ -24,10 +40,12 @@ import {
   AlertTriangle,
   XCircle,
   Terminal,
-  Users
+  Users,
+  Plus,
+  X
 } from "lucide-react";
 
-// Mock data for workspace tabs
+// Workspace Navigation Tabs
 const workspaceTabs = [
   {
     id: "academics",
@@ -55,7 +73,7 @@ const workspaceTabs = [
   },
 ];
 
-// Mock Karnataka Engineering Colleges
+// Mock Karnataka Engineering Colleges for Waitlist / Preview
 const karnatakaColleges = [
   "RV College of Engineering (RVCE), Bengaluru",
   "BMS College of Engineering (BMSCE), Bengaluru",
@@ -211,11 +229,27 @@ const faqs = [
 ];
 
 export default function Home() {
+  const { isAuthenticated, profile } = useAuth();
+
   const [activeTab, setActiveTab] = useState("academics");
   const [activeJourney, setActiveJourney] = useState(0);
 
+  // Live Backend Data States
+  const [attendanceSummaries, setAttendanceSummaries] = useState<AttendanceSummaryWithCourseDTO[]>([]);
+  const [courses, setCourses] = useState<CourseDTO[]>([]);
+  const [cieMarks, setCieMarks] = useState<StudentCieMarkWithCourseDTO[]>([]);
+  const [vivaQuestions, setVivaQuestions] = useState<VivaQuestionDTO[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
+
+  // Quick Attendance Logger Modal
+  const [showLogModal, setShowLogModal] = useState(false);
+  const [logCourseId, setLogCourseId] = useState<number>(1);
+  const [logStatus, setLogStatus] = useState<"present" | "absent" | "late">("present");
+  const [logLoading, setLogLoading] = useState(false);
+  const [logSuccessMessage, setLogSuccessMessage] = useState<string | null>(null);
+
   // Simulator State
-  const [attendance, setAttendance] = useState<number>(82);
+  const [simAttendance, setSimAttendance] = useState<number>(82);
   const [targetSGPA, setTargetSGPA] = useState<number>(8.5);
 
   // Waitlist Form State
@@ -227,6 +261,108 @@ export default function Home() {
   // FAQ Accordion state
   const [openFaq, setOpenFaq] = useState<number | null>(0);
 
+  // Fetch live dashboard metrics if student is authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const fetchDashboardData = async () => {
+      try {
+        // 1. Fetch Attendance Dashboard
+        const attRes = await fetch("/api/attendance", { credentials: "include" });
+        if (attRes.ok) {
+          const attJson = await attRes.json();
+          if (attJson.success && Array.isArray(attJson.data)) {
+            setAttendanceSummaries(attJson.data);
+            if (attJson.data.length > 0 && !selectedCourseId) {
+              setSelectedCourseId(attJson.data[0].courseId);
+              setLogCourseId(attJson.data[0].courseId);
+            }
+          }
+        }
+
+        // 2. Fetch Enrolled Courses
+        const courseRes = await fetch("/api/academics/courses", { credentials: "include" });
+        if (courseRes.ok) {
+          const courseJson = await courseRes.json();
+          if (courseJson.success && Array.isArray(courseJson.data)) {
+            setCourses(courseJson.data);
+            if (courseJson.data.length > 0 && !selectedCourseId) {
+              setSelectedCourseId(courseJson.data[0].courseId);
+              setLogCourseId(courseJson.data[0].courseId);
+            }
+          }
+        }
+
+        // 3. Fetch CIE Marks
+        const marksRes = await fetch("/api/assessments/marks", { credentials: "include" });
+        if (marksRes.ok) {
+          const marksJson = await marksRes.json();
+          if (marksJson.success && Array.isArray(marksJson.data)) {
+            setCieMarks(marksJson.data);
+          }
+        }
+
+        // 4. Fetch Senior Viva Questions
+        const vivaRes = await fetch(`/api/assessments/viva?courseId=${selectedCourseId || 1}`, { credentials: "include" });
+        if (vivaRes.ok) {
+          const vivaJson = await vivaRes.json();
+          if (vivaJson.success && Array.isArray(vivaJson.data)) {
+            setVivaQuestions(vivaJson.data);
+          }
+        }
+      } catch {
+        // Fallback to demo mode
+      }
+    };
+
+    fetchDashboardData();
+  }, [isAuthenticated, selectedCourseId]);
+
+  // Log attendance event directly to backend
+  const handleLogAttendance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!logCourseId) return;
+
+    setLogLoading(true);
+    setLogSuccessMessage(null);
+
+    try {
+      const res = await fetch("/api/attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          courseId: logCourseId,
+          attendanceDate: new Date().toISOString().split("T")[0],
+          status: logStatus,
+        }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          setLogSuccessMessage(`Logged as ${logStatus.toUpperCase()}! Recalculating radar...`);
+          // Refresh attendance summaries
+          const attRes = await fetch("/api/attendance", { credentials: "include" });
+          if (attRes.ok) {
+            const attJson = await attRes.json();
+            if (attJson.success && Array.isArray(attJson.data)) {
+              setAttendanceSummaries(attJson.data);
+            }
+          }
+          setTimeout(() => {
+            setShowLogModal(false);
+            setLogSuccessMessage(null);
+          }, 1200);
+        }
+      }
+    } catch {
+      // Handled gracefully
+    } finally {
+      setLogLoading(false);
+    }
+  };
+
   const handleWaitlistSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (email) {
@@ -234,9 +370,23 @@ export default function Home() {
     }
   };
 
-  // Calculator outputs derived from state
-  const bunkAllowance = Math.max(0, Math.floor((attendance - 75) / 2.5));
-  const reqIAMarks = Math.min(40, Math.max(16, Math.round(targetSGPA * 4)));
+  // Calculate live aggregate attendance
+  const totalClassesAggregate = attendanceSummaries.reduce((sum, item) => sum + item.totalClasses, 0);
+  const attendedClassesAggregate = attendanceSummaries.reduce((sum, item) => sum + item.attendedClasses, 0);
+  const liveAttendancePct =
+    totalClassesAggregate > 0
+      ? parseFloat(((attendedClassesAggregate / totalClassesAggregate) * 100).toFixed(1))
+      : 84.2;
+
+  // Real 75% Bunk Defense calculation
+  const liveSafeBunks =
+    totalClassesAggregate > 0
+      ? Math.max(0, Math.floor(attendedClassesAggregate / 0.75 - totalClassesAggregate))
+      : Math.max(0, Math.floor((simAttendance - 75) / 2.5));
+
+  // Simulator outputs
+  const simBunkAllowance = Math.max(0, Math.floor((simAttendance - 75) / 2.5));
+  const simReqIAMarks = Math.min(40, Math.max(16, Math.round(targetSGPA * 4)));
 
   return (
     <main className="min-h-screen bg-[#08090e] text-[#f3f4f6] selection:bg-purple-500/30 selection:text-purple-200">
@@ -246,60 +396,8 @@ export default function Home() {
         <div className="absolute inset-0 bg-grid-pattern opacity-40" />
       </div>
 
-      {/* NAVBAR */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#08090e]/80 border-b border-white/10">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 font-bold text-white shadow-lg shadow-purple-500/25">
-              CO
-            </div>
-            <div className="flex flex-col">
-              <span className="text-base font-bold tracking-tight text-white flex items-center gap-2">
-                CampusOS
-                <span className="inline-flex items-center rounded-full bg-purple-500/10 px-2 py-0.5 text-[10px] font-medium text-purple-400 border border-purple-500/20">
-                  Karnataka 2025/26
-                </span>
-              </span>
-            </div>
-          </div>
-
-          {/* Nav links */}
-          <nav className="hidden items-center gap-8 text-sm font-medium text-gray-400 md:flex">
-            <a href="#features" className="transition hover:text-white">
-              Features
-            </a>
-            <a href="#demo" className="transition hover:text-white">
-              Interactive OS
-            </a>
-            <a href="#simulator" className="transition hover:text-white">
-              CIE & Attendance Simulator
-            </a>
-            <a href="/onboarding" className="transition text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1">
-              <Sparkles className="size-3.5" /> Onboarding Flow
-            </a>
-            <a href="#why" className="transition hover:text-white">
-              Why CampusOS
-            </a>
-          </nav>
-
-          {/* Quick Actions */}
-          <div className="flex items-center gap-3">
-            <a
-              href="#cta"
-              className="hidden sm:inline-flex items-center gap-1.5 text-xs text-gray-400 border border-white/10 bg-white/[0.03] px-3 py-1.5 rounded-lg hover:border-white/20 transition"
-            >
-              <Search className="size-3.5" />
-              <span>⌘K Quick Search</span>
-            </a>
-            <a
-              href="#cta"
-              className="relative inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-purple-600/30 transition hover:from-purple-500 hover:to-indigo-500 hover:shadow-purple-500/40 active:scale-95"
-            >
-              Join Waitlist
-            </a>
-          </div>
-        </div>
-      </header>
+      {/* DYNAMIC HEADER NAVBAR */}
+      <Navbar />
 
       {/* HERO SECTION */}
       <section className="relative pt-12 pb-20 sm:pt-20 sm:pb-28 overflow-hidden">
@@ -307,7 +405,11 @@ export default function Home() {
           {/* Top Pill Badge */}
           <div className="inline-flex items-center gap-2 rounded-full border border-purple-500/30 bg-purple-500/10 px-4 py-1.5 text-xs font-semibold text-purple-300 backdrop-blur-md mb-8 animate-pulse-glow shadow-sm shadow-purple-500/20">
             <Sparkles className="size-3.5 text-purple-400" />
-            <span>Built for First-Year VTU & Autonomous Students in Karnataka</span>
+            <span>
+              {isAuthenticated && profile
+                ? `Logged in as ${profile.firstName} • Semester ${profile.semester || 1} Engineering Workspace`
+                : "Built for First-Year VTU & Autonomous Students in Karnataka"}
+            </span>
             <ChevronRight className="size-3.5 opacity-70" />
           </div>
 
@@ -326,14 +428,25 @@ export default function Home() {
 
           {/* CTA Group */}
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            <a
-              href="/onboarding"
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 px-8 text-base font-semibold text-white shadow-lg shadow-purple-600/30 transition hover:scale-[1.02] hover:shadow-purple-500/50 active:scale-98 sm:w-auto"
-            >
-              <Sparkles className="size-4 text-purple-300" />
-              Try Onboarding Flow
-              <ArrowRight className="size-4" />
-            </a>
+            {isAuthenticated ? (
+              <a
+                href="#demo"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 px-8 text-base font-semibold text-white shadow-lg shadow-purple-600/30 transition hover:scale-[1.02] hover:shadow-purple-500/50 active:scale-98 sm:w-auto"
+              >
+                <Terminal className="size-4 text-purple-300" />
+                Launch Mission Control
+                <ArrowRight className="size-4" />
+              </a>
+            ) : (
+              <Link
+                href="/onboarding"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 px-8 text-base font-semibold text-white shadow-lg shadow-purple-600/30 transition hover:scale-[1.02] hover:shadow-purple-500/50 active:scale-98 sm:w-auto"
+              >
+                <Sparkles className="size-4 text-purple-300" />
+                Try Onboarding Flow
+                <ArrowRight className="size-4" />
+              </Link>
+            )}
             <a
               href="#demo"
               className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.04] px-8 text-base font-semibold text-gray-200 backdrop-blur-md transition hover:bg-white/[0.08] hover:border-white/30 sm:w-auto"
@@ -374,13 +487,13 @@ export default function Home() {
         </div>
       </section>
 
-      {/* INTERACTIVE OS MOCKUP DEMO SECTION */}
+      {/* INTERACTIVE OS MOCKUP / MISSION CONTROL DEMO SECTION */}
       <section id="demo" className="relative pb-24 pt-4">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           {/* Section Header */}
           <div className="text-center mb-10">
             <span className="text-xs font-bold uppercase tracking-widest text-purple-400">
-              Interactive Workspace Preview
+              {isAuthenticated ? "Live Student Mission Control" : "Interactive Workspace Preview"}
             </span>
             <h2 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-4xl">
               Designed like Linear. Focused like Notion.
@@ -431,13 +544,13 @@ export default function Home() {
                 <span className="size-3 rounded-full bg-emerald-500/80 inline-block" />
                 <span className="ml-3 text-xs font-mono text-gray-400 flex items-center gap-2">
                   <Terminal className="size-3 text-purple-400" />
-                  CampusOS v1.0.4 — [VTU 2025 Scheme / Sem 1 CSE]
+                  CampusOS v1.0.4 — [{profile?.collegeId ? "RVCE / VTU 2025 Scheme" : "VTU 2025 Scheme / Sem 1 CSE"}]
                 </span>
               </div>
               <div className="hidden sm:flex items-center gap-3 text-xs text-gray-400">
                 <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-2.5 py-1 rounded-full border border-emerald-500/20 font-medium">
                   <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Attendance: 84% Safe
+                  Attendance: {liveAttendancePct}% {liveAttendancePct >= 75 ? "Safe" : "Warning"}
                 </span>
                 <span className="bg-white/[0.06] px-2.5 py-1 rounded-md text-gray-300">
                   Target: 8.5 SGPA
@@ -450,42 +563,43 @@ export default function Home() {
               {/* Sidebar (4 Cols) */}
               <aside className="lg:col-span-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 flex flex-col gap-4">
                 <div className="flex items-center justify-between text-xs font-semibold text-gray-400 uppercase tracking-wider px-2">
-                  <span>Semester 1 Workspace</span>
-                  <span className="text-purple-400">4 Subjects</span>
+                  <span>Enrolled Courses</span>
+                  <span className="text-purple-400">
+                    {courses.length > 0 ? `${courses.length} Subjects` : "4 Subjects"}
+                  </span>
                 </div>
 
                 <div className="space-y-1 text-xs">
-                  <div className="flex items-center justify-between rounded-lg bg-purple-500/15 border border-purple-500/30 px-3 py-2 text-white font-medium">
-                    <span className="flex items-center gap-2">
-                      <BookOpen className="size-3.5 text-purple-400" />
-                      Engg Mathematics I
-                    </span>
-                    <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded">BMAT101</span>
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-3 py-2 text-gray-400 hover:bg-white/[0.06] transition">
-                    <span className="flex items-center gap-2">
-                      <Code className="size-3.5 text-blue-400" />
-                      C Programming Lab
-                    </span>
-                    <span className="text-[10px] bg-white/[0.08] text-gray-400 px-1.5 py-0.5 rounded">BPOPS103</span>
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-3 py-2 text-gray-400 hover:bg-white/[0.06] transition">
-                    <span className="flex items-center gap-2">
-                      <Zap className="size-3.5 text-amber-400" />
-                      Physics Cycle Lab
-                    </span>
-                    <span className="text-[10px] bg-white/[0.08] text-gray-400 px-1.5 py-0.5 rounded">BPHYS102</span>
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-3 py-2 text-gray-400 hover:bg-white/[0.06] transition">
-                    <span className="flex items-center gap-2">
-                      <Cpu className="size-3.5 text-cyan-400" />
-                      Basic Electronics
-                    </span>
-                    <span className="text-[10px] bg-white/[0.08] text-gray-400 px-1.5 py-0.5 rounded">BEC104</span>
-                  </div>
+                  {(courses.length > 0
+                    ? courses
+                    : [
+                        { courseId: 1, courseName: "Engg Mathematics I", courseCode: "BMAT101" },
+                        { courseId: 2, courseName: "C Programming Lab", courseCode: "BPOPS103" },
+                        { courseId: 3, courseName: "Physics Cycle Lab", courseCode: "BPHYS102" },
+                        { courseId: 4, courseName: "Basic Electronics", courseCode: "BEC104" },
+                      ]
+                  ).map((c) => {
+                    const isSelected = selectedCourseId === c.courseId;
+                    return (
+                      <div
+                        key={c.courseId}
+                        onClick={() => setSelectedCourseId(c.courseId)}
+                        className={`flex items-center justify-between rounded-lg px-3 py-2 cursor-pointer transition ${
+                          isSelected
+                            ? "bg-purple-500/15 border border-purple-500/30 text-white font-medium"
+                            : "bg-white/[0.03] text-gray-400 hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 truncate">
+                          <BookOpen className="size-3.5 text-purple-400 shrink-0" />
+                          <span className="truncate">{c.courseName}</span>
+                        </span>
+                        <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded shrink-0">
+                          {c.courseCode || "VTU"}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <div className="mt-auto border-t border-white/10 pt-3">
@@ -504,11 +618,13 @@ export default function Home() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-4">
                       <div>
                         <span className="text-xs font-semibold text-purple-400 uppercase tracking-wider">Module Breakdown</span>
-                        <h3 className="text-xl font-bold text-white">Mathematics I (BMAT101) — 4 Credits</h3>
+                        <h3 className="text-xl font-bold text-white">
+                          {courses.find((c) => c.courseId === selectedCourseId)?.courseName || "Mathematics I (BMAT101)"} — 4 Credits
+                        </h3>
                       </div>
                       <div className="flex items-center gap-2 text-xs">
                         <span className="bg-purple-500/20 text-purple-300 border border-purple-500/30 px-3 py-1 rounded-full font-medium">
-                          IA1 Target: 36/40
+                          IA Target: 36/40
                         </span>
                       </div>
                     </div>
@@ -516,7 +632,9 @@ export default function Home() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
                         <span className="text-xs text-gray-400">Current CIE Marks</span>
-                        <p className="text-xl font-bold text-white mt-1">34 / 40</p>
+                        <p className="text-xl font-bold text-white mt-1">
+                          {cieMarks.length > 0 ? `${cieMarks[0].marksObtained} / ${cieMarks[0].maxMarks}` : "34 / 40"}
+                        </p>
                         <span className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1">
                           <CheckCircle2 className="size-3" /> IA1 Completed
                         </span>
@@ -574,41 +692,85 @@ export default function Home() {
                         <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">VTU Attendance Radar</span>
                         <h3 className="text-xl font-bold text-white">75% Mandatory Cutoff Monitor</h3>
                       </div>
-                      <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1 rounded-full text-xs font-medium">
-                        Status: Safe Buffer Active
-                      </span>
+                      <button
+                        onClick={() => setShowLogModal(true)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-md shadow-emerald-600/30 transition cursor-pointer"
+                      >
+                        <Plus className="size-3.5" />
+                        <span>Log Attendance</span>
+                      </button>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
                         <div className="flex justify-between text-sm">
                           <span className="text-gray-400">Overall Attendance</span>
-                          <span className="font-bold text-white">84.2%</span>
+                          <span className={`font-bold ${liveAttendancePct >= 75 ? "text-emerald-400" : "text-rose-400"}`}>
+                            {liveAttendancePct}%
+                          </span>
                         </div>
                         <div className="h-2.5 w-full bg-white/10 rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 w-[84%]" />
+                          <div
+                            className={`h-full ${
+                              liveAttendancePct >= 75
+                                ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                                : "bg-gradient-to-r from-rose-500 to-amber-500"
+                            }`}
+                            style={{ width: `${Math.min(100, liveAttendancePct)}%` }}
+                          />
                         </div>
                         <p className="text-xs text-gray-400">
-                          Total Classes Held: <strong className="text-white">120</strong> | Attended: <strong className="text-white">101</strong>
+                          Total Classes: <strong className="text-white">{totalClassesAggregate || 120}</strong> | Attended: <strong className="text-white">{attendedClassesAggregate || 101}</strong>
                         </p>
                       </div>
 
                       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 flex flex-col justify-between">
                         <div>
                           <span className="text-xs text-gray-400">Calculated Safe Bunks</span>
-                          <p className="text-2xl font-bold text-emerald-400 mt-1">3 Classes Buffer</p>
+                          <p className={`text-2xl font-bold mt-1 ${liveSafeBunks > 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                            {liveSafeBunks > 0 ? `${liveSafeBunks} Classes Buffer` : "0 Classes (At Cutoff!)"}
+                          </p>
                         </div>
-                        <p className="text-xs text-gray-400">You can safely miss 3 classes without dipping below 75%.</p>
+                        <p className="text-xs text-gray-400">
+                          {liveSafeBunks > 0
+                            ? `You can safely miss ${liveSafeBunks} classes without dipping below 75%.`
+                            : "Must attend upcoming lectures to avoid detention lists."}
+                        </p>
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex items-start gap-3">
-                      <AlertTriangle className="size-5 text-amber-400 shrink-0 mt-0.5" />
-                      <div>
-                        <h4 className="text-sm font-semibold text-amber-200">Upcoming Lab Attendance Alert</h4>
-                        <p className="text-xs text-amber-300/80 mt-1">
-                          Physics Lab has 2 consecutive sessions on Thursday. Missing this lab will drop your lab attendance from 80% to 73%.
-                        </p>
+                    {/* Course Attendance List */}
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Subject Attendance Radar</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {(attendanceSummaries.length > 0
+                          ? attendanceSummaries
+                          : [
+                              { summaryId: 1, courseName: "Engg Mathematics I", courseCode: "BMAT101", totalClasses: 30, attendedClasses: 26, attendancePercentage: 86.6 },
+                              { summaryId: 2, courseName: "C Programming Lab", courseCode: "BPOPS103", totalClasses: 24, attendedClasses: 21, attendancePercentage: 87.5 },
+                              { summaryId: 3, courseName: "Physics Cycle Lab", courseCode: "BPHYS102", totalClasses: 20, attendedClasses: 16, attendancePercentage: 80.0 },
+                              { summaryId: 4, courseName: "Basic Electronics", courseCode: "BEC104", totalClasses: 26, attendedClasses: 21, attendancePercentage: 80.7 },
+                            ]
+                        ).map((s, idx) => (
+                          <div
+                            key={idx}
+                            className="p-3 rounded-xl border border-white/10 bg-white/[0.02] flex items-center justify-between"
+                          >
+                            <div>
+                              <strong className="text-xs text-white block">{s.courseName}</strong>
+                              <span className="text-[10px] text-gray-400">{s.attendedClasses}/{s.totalClasses} Classes</span>
+                            </div>
+                            <span
+                              className={`text-xs font-bold px-2 py-1 rounded-lg ${
+                                s.attendancePercentage >= 75
+                                  ? "bg-emerald-500/20 text-emerald-300"
+                                  : "bg-rose-500/20 text-rose-300"
+                              }`}
+                            >
+                              {s.attendancePercentage}%
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -628,35 +790,29 @@ export default function Home() {
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-indigo-400 uppercase">C Programming Lab Viva</span>
-                          <span className="text-[10px] bg-white/10 text-gray-300 px-2 py-0.5 rounded">Most Asked</span>
+                      {(vivaQuestions.length > 0
+                        ? vivaQuestions.slice(0, 4)
+                        : [
+                            { vivaId: 1, question: "Top 15 Pointers & Recursion Questions: External examiners always test call-by-value vs call-by-reference.", difficulty: "medium" },
+                            { vivaId: 2, question: "VTU Repeated Derivations for M2: Cayley-Hamilton 7-mark derivation appears in 8 out of 10 VTU papers.", difficulty: "hard" },
+                          ]
+                      ).map((v, idx) => (
+                        <div key={idx} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-indigo-400 uppercase">
+                              Viva Question #{idx + 1}
+                            </span>
+                            <span className="text-[10px] bg-white/10 text-gray-300 px-2 py-0.5 rounded capitalize">
+                              {v.difficulty || "Important"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-300 leading-relaxed">{v.question}</p>
+                          <div className="pt-2 text-[11px] text-gray-400 flex items-center gap-2">
+                            <UserCheck className="size-3 text-emerald-400" />
+                            <span>Verified by Karnataka Senior Guild</span>
+                          </div>
                         </div>
-                        <h4 className="text-sm font-bold text-white">Top 15 Pointers & Recursion Questions</h4>
-                        <p className="text-xs text-gray-400">
-                          &quot;External examiners always test call-by-value vs call-by-reference and structure padding. Read page 4 notes.&quot;
-                        </p>
-                        <div className="pt-2 text-[11px] text-gray-400 flex items-center gap-2">
-                          <UserCheck className="size-3 text-emerald-400" />
-                          <span>By Rahul M. (7th Sem CSE, 9.4 CGPA)</span>
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-pink-400 uppercase">Math IA2 Hack</span>
-                          <span className="text-[10px] bg-white/10 text-gray-300 px-2 py-0.5 rounded">High Yield</span>
-                        </div>
-                        <h4 className="text-sm font-bold text-white">VTU Repeated Derivations for M2</h4>
-                        <p className="text-xs text-gray-400">
-                          &quot;Cayley-Hamilton 7-mark derivation appears in 8 out of 10 VTU papers. Practice step 3 carefully.&quot;
-                        </p>
-                        <div className="pt-2 text-[11px] text-gray-400 flex items-center gap-2">
-                          <UserCheck className="size-3 text-emerald-400" />
-                          <span>By Ananya S. (5th Sem ISE, 9.1 CGPA)</span>
-                        </div>
-                      </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -669,9 +825,13 @@ export default function Home() {
                         <span className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">Sem 1 Career Engine</span>
                         <h3 className="text-xl font-bold text-white">First-Year Technical Progression</h3>
                       </div>
-                      <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-3 py-1 rounded-full text-xs font-medium">
-                        Placement Ready by Sem 4
-                      </span>
+                      <Link
+                        href="/roadmap"
+                        className="inline-flex items-center gap-1.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-3 py-1 rounded-full text-xs font-medium hover:bg-cyan-500/30 transition"
+                      >
+                        <span>Full Roadmap Hub</span>
+                        <ArrowRight className="size-3" />
+                      </Link>
                     </div>
 
                     <div className="space-y-3">
@@ -715,6 +875,90 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {/* QUICK ATTENDANCE LOGGER MODAL */}
+      {showLogModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+          <div className="relative w-full max-w-md rounded-3xl border border-emerald-500/30 bg-[#0d0f18] p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="size-5 text-emerald-400" />
+                <h3 className="text-sm font-bold text-white">Log Today&apos;s Attendance</h3>
+              </div>
+              <button
+                onClick={() => setShowLogModal(false)}
+                className="text-gray-400 hover:text-white cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {logSuccessMessage ? (
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-center space-y-2">
+                <CheckCircle2 className="size-8 text-emerald-400 mx-auto" />
+                <p className="text-xs font-bold text-emerald-300">{logSuccessMessage}</p>
+              </div>
+            ) : (
+              <form onSubmit={handleLogAttendance} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-300 mb-1">Select Course</label>
+                  <select
+                    value={logCourseId}
+                    onChange={(e) => setLogCourseId(Number(e.target.value))}
+                    className="w-full rounded-xl border border-white/15 bg-black/60 px-3 py-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                  >
+                    {(courses.length > 0
+                      ? courses
+                      : [{ courseId: 1, courseName: "Engg Mathematics I (BMAT101)" }]
+                    ).map((c) => (
+                      <option key={c.courseId} value={c.courseId} className="bg-gray-900 text-gray-200">
+                        {c.courseName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-300 mb-1">Status</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["present", "absent", "late"] as const).map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setLogStatus(st)}
+                        className={`py-2 text-xs font-semibold rounded-xl border transition capitalize cursor-pointer ${
+                          logStatus === st
+                            ? "bg-emerald-600 border-emerald-500 text-white shadow-lg"
+                            : "bg-white/[0.03] border-white/10 text-gray-400 hover:text-white"
+                        }`}
+                      >
+                        {st}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-2 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowLogModal(false)}
+                    className="flex-1 py-2.5 bg-white/10 hover:bg-white/15 rounded-xl text-xs font-bold text-white transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={logLoading}
+                    className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl text-xs font-bold text-white shadow-lg shadow-emerald-600/30 transition disabled:opacity-50 cursor-pointer"
+                  >
+                    {logLoading ? "Saving..." : "Record Entry"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* FEATURES GRID SECTION */}
       <section id="features" className="py-24 relative z-10 border-t border-white/10 bg-[#08090e]/60">
@@ -810,16 +1054,16 @@ export default function Home() {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <label className="text-gray-300 font-medium">Current Attendance Percentage</label>
-                  <span className={`font-bold ${attendance >= 75 ? "text-emerald-400" : "text-rose-400"}`}>
-                    {attendance}%
+                  <span className={`font-bold ${simAttendance >= 75 ? "text-emerald-400" : "text-rose-400"}`}>
+                    {simAttendance}%
                   </span>
                 </div>
                 <input
                   type="range"
                   min="50"
                   max="100"
-                  value={attendance}
-                  onChange={(e) => setAttendance(Number(e.target.value))}
+                  value={simAttendance}
+                  onChange={(e) => setSimAttendance(Number(e.target.value))}
                   className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
                 />
                 <div className="flex justify-between text-[11px] text-gray-500">
@@ -856,8 +1100,8 @@ export default function Home() {
                 <div className="space-y-1">
                   <span className="text-xs text-gray-400">Allowed Safe Bunks Left</span>
                   <div className="text-2xl font-extrabold text-white flex items-center gap-2">
-                    {bunkAllowance > 0 ? (
-                      <span className="text-emerald-400">{bunkAllowance} Classes</span>
+                    {simBunkAllowance > 0 ? (
+                      <span className="text-emerald-400">{simBunkAllowance} Classes</span>
                     ) : (
                       <span className="text-rose-400">0 Classes (Must Attend!)</span>
                     )}
@@ -868,7 +1112,7 @@ export default function Home() {
                 <div className="space-y-1">
                   <span className="text-xs text-gray-400">Min. IA Score Needed</span>
                   <div className="text-2xl font-extrabold text-purple-400">
-                    {reqIAMarks} / 40 Marks
+                    {simReqIAMarks} / 40 Marks
                   </div>
                   <p className="text-[11px] text-gray-400">To achieve {targetSGPA} SGPA.</p>
                 </div>
@@ -1055,7 +1299,7 @@ export default function Home() {
                   >
                     <button
                       onClick={() => setOpenFaq(isOpen ? null : idx)}
-                      className="w-full flex items-center justify-between text-left text-sm font-semibold text-white hover:text-purple-300 transition"
+                      className="w-full flex items-center justify-between text-left text-sm font-semibold text-white hover:text-purple-300 transition cursor-pointer"
                     >
                       <span>{faq.q}</span>
                       <ChevronDown
