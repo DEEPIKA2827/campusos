@@ -1,7 +1,15 @@
+/**
+ * @file app/roadmap/page.tsx
+ * @description Interactive Roadmap & Milestone Hub for CampusOS.
+ * @purpose Renders node-by-node semester progress tree; integrates with /api/roadmaps and /api/roadmaps/[id]/progress.
+ */
+
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { Navbar } from "@/components/layout/navbar";
+import { RoadmapNodeDTO, RoadmapProgressStatus } from "@/types/api.types";
 import {
   Compass,
   CheckCircle2,
@@ -13,7 +21,8 @@ import {
   Award,
   Sparkles,
   ExternalLink,
-  X
+  X,
+  Check
 } from "lucide-react";
 
 // Filter Selector Data
@@ -48,10 +57,25 @@ const careerGoals = [
   { id: "founder", label: "Startup Founder / Product Creator" },
 ];
 
-// Roadmap Tree Nodes (Roadmap.sh Style)
-const roadmapNodes = [
+export interface NodeItem {
+  id: string;
+  nodeId?: number;
+  roadmapId?: number;
+  sem: number;
+  title: string;
+  category: string;
+  status: "completed" | "in_progress" | "locked" | "available";
+  desc: string;
+  topics: string[];
+  resourceLink: string;
+}
+
+// Fallback Curated Nodes
+const defaultRoadmapNodes: NodeItem[] = [
   {
-    id: "sem1_basics",
+    id: "1",
+    nodeId: 1,
+    roadmapId: 1,
     sem: 1,
     title: "Sem 1: C Programming & Git Baseline",
     category: "Foundation",
@@ -61,7 +85,9 @@ const roadmapNodes = [
     resourceLink: "C Programming Lab Senior Playbook",
   },
   {
-    id: "sem1_math",
+    id: "2",
+    nodeId: 2,
+    roadmapId: 1,
     sem: 1,
     title: "Sem 1: Engg Mathematics I (BMAT101)",
     category: "Academics",
@@ -71,7 +97,9 @@ const roadmapNodes = [
     resourceLink: "BMAT101 PYQ Frequency Sheet",
   },
   {
-    id: "sem2_dsa",
+    id: "3",
+    nodeId: 3,
+    roadmapId: 1,
     sem: 2,
     title: "Sem 2: Data Structures Starter in C/C++",
     category: "Core Skill",
@@ -81,7 +109,9 @@ const roadmapNodes = [
     resourceLink: "DSA Starter Sheet",
   },
   {
-    id: "sem2_project",
+    id: "4",
+    nodeId: 4,
+    roadmapId: 1,
     sem: 2,
     title: "Sem 2: First Proof-of-Work Project",
     category: "Projects",
@@ -91,7 +121,9 @@ const roadmapNodes = [
     resourceLink: "Project Spec & Code Template",
   },
   {
-    id: "sem3_oop",
+    id: "5",
+    nodeId: 5,
+    roadmapId: 1,
     sem: 3,
     title: "Sem 3: Object-Oriented Programming (Java/C++)",
     category: "Core Skill",
@@ -101,7 +133,9 @@ const roadmapNodes = [
     resourceLink: "OOP Interview Questions",
   },
   {
-    id: "sem4_dbms",
+    id: "6",
+    nodeId: 6,
+    roadmapId: 1,
     sem: 4,
     title: "Sem 4: DBMS & Web Tech Stack",
     category: "Full Stack",
@@ -194,14 +228,104 @@ export default function RoadmapPage() {
   const [semester, setSemester] = useState<number>(2);
   const [goal, setGoal] = useState("sde");
 
+  const [nodes, setNodes] = useState<NodeItem[]>(defaultRoadmapNodes);
+  const [activeRoadmapId, setActiveRoadmapId] = useState<number>(1);
+
   // Tab State
   const [activeTab, setActiveTab] = useState<"tree" | "projects" | "resources" | "certs" | "dsa" | "resume">("tree");
 
   // Selected Node Modal State
-  const [selectedNode, setSelectedNode] = useState<typeof roadmapNodes[0] | null>(null);
+  const [selectedNode, setSelectedNode] = useState<NodeItem | null>(null);
 
   // Resume Checklist Toggle State
   const [checklistState, setChecklistState] = useState(resumeChecklist);
+
+  // Fetch active roadmap and nodes from API on mount
+  useEffect(() => {
+    const fetchRoadmaps = async () => {
+      try {
+        const res = await fetch("/api/roadmaps", { credentials: "include" });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            const firstRoadmap = json.data[0];
+            setActiveRoadmapId(firstRoadmap.roadmapId);
+
+            // Fetch nodes for active roadmap
+            const nodesRes = await fetch(`/api/roadmaps/${firstRoadmap.roadmapId}`, {
+              credentials: "include",
+            });
+            if (nodesRes.ok) {
+              const nodesJson = await nodesRes.json();
+              if (nodesJson.success && nodesJson.data?.nodes) {
+                const apiNodes: RoadmapNodeDTO[] = nodesJson.data.nodes;
+                const progressMap: Record<number, RoadmapProgressStatus> = {};
+                if (Array.isArray(nodesJson.data.userProgress)) {
+                  nodesJson.data.userProgress.forEach((p: { nodeId: number; status: RoadmapProgressStatus }) => {
+                    progressMap[p.nodeId] = p.status;
+                  });
+                }
+
+                if (apiNodes.length > 0) {
+                  const mapped: NodeItem[] = apiNodes.map((n, idx) => {
+                    const fallback = defaultRoadmapNodes[idx % defaultRoadmapNodes.length];
+                    const userStatus = progressMap[n.nodeId] || (idx === 0 ? "completed" : idx === 1 ? "in_progress" : "locked");
+
+                    return {
+                      id: String(n.nodeId),
+                      nodeId: n.nodeId,
+                      roadmapId: firstRoadmap.roadmapId,
+                      sem: Math.min(8, Math.max(1, Math.ceil((n.sequenceNo || idx + 1) / 2))),
+                      title: n.title,
+                      category: fallback?.category || "Core Skill",
+                      status: userStatus as "completed" | "in_progress" | "locked" | "available",
+                      desc: n.description || fallback?.desc || "Master key competencies for this milestone.",
+                      topics: fallback?.topics || ["Core Fundamentals", "Practical Labs", "Exam Derivations"],
+                      resourceLink: fallback?.resourceLink || "Senior Notes Attached",
+                    };
+                  });
+                  setNodes(mapped);
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // Fallback gracefully to default curated nodes
+      }
+    };
+
+    fetchRoadmaps();
+  }, []);
+
+  /**
+   * Updates node progress and persists to /api/roadmaps/[id]/progress
+   */
+  const updateNodeStatus = async (node: NodeItem, newStatus: "completed" | "in_progress" | "available" | "locked") => {
+    const updated = nodes.map((n) => (n.id === node.id ? { ...n, status: newStatus } : n));
+    setNodes(updated);
+
+    if (selectedNode && selectedNode.id === node.id) {
+      setSelectedNode({ ...selectedNode, status: newStatus });
+    }
+
+    if (node.nodeId) {
+      try {
+        const roadmapId = node.roadmapId || activeRoadmapId;
+        await fetch(`/api/roadmaps/${roadmapId}/progress`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            nodeId: node.nodeId,
+            status: newStatus === "locked" ? "not_started" : newStatus,
+          }),
+        });
+      } catch {
+        // Graceful silent fallback
+      }
+    }
+  };
 
   const toggleChecklist = (id: string) => {
     setChecklistState(
@@ -217,39 +341,8 @@ export default function RoadmapPage() {
         <div className="absolute inset-0 bg-grid-pattern opacity-30" />
       </div>
 
-      {/* HEADER NAVBAR */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#08090e]/80 border-b border-white/10">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <Link href="/" className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 font-bold text-white shadow-lg shadow-purple-500/25">
-              CO
-            </Link>
-            <div className="flex flex-col">
-              <span className="text-sm font-bold tracking-tight text-white flex items-center gap-2">
-                CampusOS Roadmap Hub
-                <span className="inline-flex items-center rounded-full bg-purple-500/10 px-2 py-0.5 text-[10px] font-medium text-purple-400 border border-purple-500/20">
-                  roadmap.sh Powered
-                </span>
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Link
-              href="/onboarding"
-              className="text-xs text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 hidden sm:flex"
-            >
-              <Sparkles className="size-3.5" /> Re-run Setup
-            </Link>
-            <Link
-              href="/"
-              className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/[0.04] px-3.5 py-1.5 text-xs font-semibold text-gray-200 hover:bg-white/[0.08]"
-            >
-              Back to Workspace
-            </Link>
-          </div>
-        </div>
-      </header>
+      {/* DYNAMIC HEADER NAVBAR */}
+      <Navbar />
 
       {/* HERO & CONFIGURATOR BAR */}
       <section className="relative z-10 pt-8 pb-6 border-b border-white/10 bg-white/[0.01]">
@@ -321,29 +414,34 @@ export default function RoadmapPage() {
               </select>
             </div>
           </div>
+        </div>
+      </section>
 
-          {/* ROADMAP HUB NAVIGATION TABS */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none pt-2">
+      {/* 6 OUTPUT TABS NAVIGATION */}
+      <section className="relative z-10 border-b border-white/10 bg-black/40">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-2 overflow-x-auto py-2.5 scrollbar-none">
             {[
-              { id: "tree", label: "🗺️ Learning Roadmap Tree" },
-              { id: "projects", label: "🛠️ Proof-of-Work Projects" },
-              { id: "resources", label: "📚 Academic Resources" },
-              { id: "certs", label: "📜 Certifications" },
-              { id: "dsa", label: "🧠 DSA Mastery Track" },
-              { id: "resume", label: "📄 Resume Checklist" },
+              { id: "tree", label: "Learning Tree (Visual Nodes)", icon: Compass },
+              { id: "projects", label: "Proof-of-Work Projects", icon: FolderGit2 },
+              { id: "dsa", label: "DSA & LeetCode Track", icon: Code },
+              { id: "certs", label: "Industry Certifications", icon: Award },
+              { id: "resume", label: "Resume Milestone Checklist", icon: CheckCircle2 },
             ].map((tab) => {
-              const isActive = activeTab === tab.id;
+              const IconComp = tab.icon;
+              const isSelected = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                  className={`shrink-0 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                    isActive
-                      ? "bg-purple-600 text-white shadow-md shadow-purple-600/30 border border-purple-400/30"
-                      : "bg-white/[0.04] text-gray-400 hover:bg-white/[0.08] hover:text-white border border-white/5"
+                  className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                    isSelected
+                      ? "bg-purple-600 text-white shadow-lg shadow-purple-600/30"
+                      : "text-gray-400 hover:text-white hover:bg-white/[0.04]"
                   }`}
                 >
-                  {tab.label}
+                  <IconComp className="size-3.5" />
+                  <span>{tab.label}</span>
                 </button>
               );
             })}
@@ -351,92 +449,81 @@ export default function RoadmapPage() {
         </div>
       </section>
 
-      {/* TAB CONTENT SECTIONS */}
-      <section className="py-8 relative z-10">
+      {/* MAIN CONTENT AREA */}
+      <section className="relative z-10 py-8">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          {/* 1. ROADMAP TREE TAB (roadmap.sh style) */}
+          {/* TAB 1: LEARNING TREE NODES */}
           {activeTab === "tree" && (
-            <div className="space-y-8">
-              <div className="flex items-center justify-between border-b border-white/10 pb-4">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
                 <div>
-                  <span className="text-xs font-bold uppercase tracking-wider text-purple-400">Node-Based Roadmap</span>
-                  <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">
-                    Sem 1 to Sem 8 Path for {branch.toUpperCase()}
-                  </h2>
+                  <h2 className="text-lg font-bold text-white">Visual Milestone Roadmap</h2>
+                  <p className="text-xs text-gray-400">Click any milestone node to view topics, senior playbooks, and update progress status.</p>
                 </div>
-                <div className="flex items-center gap-4 text-xs font-medium text-gray-400">
-                  <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-full bg-emerald-400" /> Completed</span>
-                  <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-full bg-cyan-400" /> In Progress</span>
-                  <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-full bg-gray-600" /> Locked</span>
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                    <span className="size-2 rounded-full bg-emerald-400 animate-pulse" /> Completed
+                  </span>
+                  <span className="flex items-center gap-1.5 text-purple-400 font-medium">
+                    <span className="size-2 rounded-full bg-purple-400" /> In Progress
+                  </span>
+                  <span className="flex items-center gap-1.5 text-gray-500 font-medium">
+                    <span className="size-2 rounded-full bg-gray-500" /> Locked
+                  </span>
                 </div>
               </div>
 
-              {/* Visual Node Tree Flow */}
-              <div className="relative max-w-4xl mx-auto space-y-6 before:absolute before:left-4 sm:before:left-1/2 before:top-0 before:bottom-0 before:w-0.5 before:bg-white/10 before:-translate-x-1/2">
-                {roadmapNodes.map((node, idx) => {
+              {/* NODE TREE GRID */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {nodes.map((node) => {
                   const isCompleted = node.status === "completed";
                   const isInProgress = node.status === "in_progress";
-                  const isLeft = idx % 2 === 0;
 
                   return (
                     <div
                       key={node.id}
                       onClick={() => setSelectedNode(node)}
-                      className={`relative flex items-center gap-4 sm:gap-8 cursor-pointer group ${
-                        isLeft ? "sm:flex-row" : "sm:flex-row-reverse"
+                      className={`group relative rounded-3xl border p-5 shadow-xl transition-all cursor-pointer flex flex-col justify-between ${
+                        isCompleted
+                          ? "border-emerald-500/30 bg-emerald-950/10 hover:border-emerald-500/60"
+                          : isInProgress
+                          ? "border-purple-500/40 bg-purple-950/20 hover:border-purple-500/80 animate-pulse-glow"
+                          : "border-white/10 bg-white/[0.02] hover:border-white/20 opacity-70"
                       }`}
                     >
-                      {/* Central Node Badge Dot */}
-                      <div
-                        className={`absolute left-4 sm:left-1/2 -translate-x-1/2 size-9 rounded-full border-2 flex items-center justify-center font-bold text-xs z-10 transition duration-300 ${
-                          isCompleted
-                            ? "bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-lg shadow-emerald-500/30"
-                            : isInProgress
-                            ? "bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-lg shadow-cyan-500/30 animate-pulse"
-                            : "bg-gray-900 border-gray-700 text-gray-500"
-                        }`}
-                      >
-                        {isCompleted ? <CheckCircle2 className="size-4" /> : isInProgress ? <Clock className="size-4" /> : <Lock className="size-4" />}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                            Sem {node.sem} • {node.category}
+                          </span>
+                          {isCompleted ? (
+                            <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                              <CheckCircle2 className="size-3" /> Done
+                            </span>
+                          ) : isInProgress ? (
+                            <span className="flex items-center gap-1 text-[11px] font-bold text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded-full border border-purple-500/30">
+                              <Clock className="size-3" /> In Progress
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-[11px] font-bold text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">
+                              <Lock className="size-3" /> Locked
+                            </span>
+                          )}
+                        </div>
+
+                        <h3 className="text-base font-bold text-white group-hover:text-purple-300 transition">
+                          {node.title}
+                        </h3>
+                        <p className="text-xs text-gray-400 line-clamp-2 leading-relaxed">
+                          {node.desc}
+                        </p>
                       </div>
 
-                      {/* Card Content Box */}
-                      <div className={`ml-12 sm:ml-0 sm:w-1/2 ${isLeft ? "sm:pr-10 sm:text-right" : "sm:pl-10 sm:text-left"}`}>
-                        <div
-                          className={`rounded-2xl border p-5 backdrop-blur-md transition duration-200 group-hover:-translate-y-1 ${
-                            isCompleted
-                              ? "bg-emerald-500/5 border-emerald-500/30 group-hover:border-emerald-500/60"
-                              : isInProgress
-                              ? "bg-purple-500/10 border-purple-500/40 group-hover:border-purple-500/70"
-                              : "bg-white/[0.02] border-white/10 opacity-60"
-                          }`}
-                        >
-                          <div className={`flex items-center gap-2 mb-2 ${isLeft ? "sm:justify-end" : "sm:justify-start"}`}>
-                            <span className="text-[10px] font-bold uppercase tracking-wider bg-white/10 px-2 py-0.5 rounded text-gray-300">
-                              {node.category}
-                            </span>
-                            <span className="text-[10px] font-semibold text-purple-400">
-                              Sem {node.sem}
-                            </span>
-                          </div>
-
-                          <h3 className="text-base font-bold text-white group-hover:text-purple-300 transition">
-                            {node.title}
-                          </h3>
-                          <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">
-                            {node.desc}
-                          </p>
-
-                          <div className={`flex flex-wrap gap-1 mt-3 ${isLeft ? "sm:justify-end" : "sm:justify-start"}`}>
-                            {node.topics.slice(0, 3).map((topic, tIdx) => (
-                              <span key={tIdx} className="text-[10px] bg-white/[0.05] text-gray-300 px-2 py-0.5 rounded border border-white/5">
-                                {topic}
-                              </span>
-                            ))}
-                            {node.topics.length > 3 && (
-                              <span className="text-[10px] text-purple-400 font-semibold px-1">+More</span>
-                            )}
-                          </div>
-                        </div>
+                      <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-xs">
+                        <span className="text-[11px] text-gray-500">{node.topics.length} Key Topics</span>
+                        <span className="text-purple-400 font-semibold group-hover:translate-x-1 transition-transform">
+                          Inspect Node →
+                        </span>
                       </div>
                     </div>
                   );
@@ -445,138 +532,44 @@ export default function RoadmapPage() {
             </div>
           )}
 
-          {/* 2. PROOF-OF-WORK PROJECTS TAB */}
+          {/* TAB 2: PROOF-OF-WORK PROJECTS */}
           {activeTab === "projects" && (
-            <div className="space-y-6">
-              <div className="border-b border-white/10 pb-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-purple-400">Proof of Work Builder</span>
-                <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">Recommended 1st & 2nd Year Projects</h2>
-                <p className="text-xs text-gray-400 mt-1">Pre-configured project specifications to build real portfolio proof of work.</p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {projectSpecs.map((proj) => (
-                  <div key={proj.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 backdrop-blur-md space-y-4 hover:border-purple-500/40 transition">
+            <div className="space-y-4">
+              <h2 className="text-lg font-bold text-white">Recommended Proof-of-Work Projects</h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {projectSpecs.map((p) => (
+                  <div key={p.id} className="rounded-3xl border border-white/10 bg-white/[0.02] p-5 space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold bg-purple-500/20 text-purple-300 px-2.5 py-0.5 rounded border border-purple-500/30">
-                        {proj.level}
-                      </span>
-                      <FolderGit2 className="size-5 text-purple-400" />
+                      <span className="text-xs font-bold text-purple-400">{p.level}</span>
+                      <div className="flex gap-1">
+                        {p.techStack.map((t, idx) => (
+                          <span key={idx} className="text-[10px] bg-white/5 px-2 py-0.5 rounded text-gray-300">
+                            {t}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-
-                    <h3 className="text-lg font-bold text-white">{proj.title}</h3>
-                    <p className="text-xs text-gray-400 leading-relaxed">{proj.desc}</p>
-
-                    <div className="space-y-2 border-t border-white/10 pt-3">
-                      <span className="text-[11px] font-semibold text-gray-400 block">Deliverables Required:</span>
-                      {proj.deliverables.map((del, dIdx) => (
-                        <div key={dIdx} className="flex items-center gap-2 text-xs text-gray-300">
-                          <CheckCircle2 className="size-3.5 text-emerald-400 shrink-0" />
-                          <span>{del}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="flex flex-wrap gap-1.5 pt-2">
-                      {proj.techStack.map((tech, tIdx) => (
-                        <span key={tIdx} className="text-[10px] bg-white/10 text-gray-300 px-2 py-0.5 rounded">
-                          {tech}
-                        </span>
-                      ))}
-                    </div>
+                    <h3 className="text-base font-bold text-white">{p.title}</h3>
+                    <p className="text-xs text-gray-400">{p.desc}</p>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* 3. ACADEMIC & TECH RESOURCES TAB */}
-          {activeTab === "resources" && (
-            <div className="space-y-6">
-              <div className="border-b border-white/10 pb-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-purple-400">Academic Vault</span>
-                <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">VTU & Autonomous Verified Notes</h2>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 space-y-3">
-                  <div className="flex items-center gap-2 text-purple-400 font-bold text-xs">
-                    <BookOpen className="size-4" />
-                    <span>Engg Mathematics I (BMAT101) Notes</span>
-                  </div>
-                  <h3 className="text-base font-bold text-white">VTU Module 1 to 5 Formula Cheat Sheet</h3>
-                  <p className="text-xs text-gray-400">Includes top 15 repeated derivations for Calculus and Linear Algebra.</p>
-                  <a href="#download" className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-400 hover:text-purple-300 pt-1">
-                    Download PDF Playbook <ExternalLink className="size-3.5" />
-                  </a>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 space-y-3">
-                  <div className="flex items-center gap-2 text-blue-400 font-bold text-xs">
-                    <Code className="size-4" />
-                    <span>C Programming Lab Viva Vault</span>
-                  </div>
-                  <h3 className="text-base font-bold text-white">Top 30 C Pointers & Structures Viva Q&As</h3>
-                  <p className="text-xs text-gray-400">Vetted by 3rd-year RVCE & BMSCE seniors for external lab exams.</p>
-                  <a href="#download" className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-400 hover:text-blue-300 pt-1">
-                    Download Viva PDF <ExternalLink className="size-3.5" />
-                  </a>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 4. RECOMMENDED CERTIFICATIONS TAB */}
-          {activeTab === "certs" && (
-            <div className="space-y-6">
-              <div className="border-b border-white/10 pb-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-purple-400">Industry & Academic Certifications</span>
-                <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">High-Yield Certifications for 1st/2nd Year</h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {certifications.map((cert, idx) => (
-                  <div key={idx} className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30">
-                        {cert.badge}
-                      </span>
-                      <Award className="size-5 text-emerald-400" />
-                    </div>
-
-                    <h3 className="text-base font-bold text-white">{cert.title}</h3>
-                    <span className="text-xs text-purple-400 block font-medium">{cert.provider}</span>
-                    <p className="text-xs text-gray-400 leading-relaxed">{cert.desc}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 5. DSA MASTERY TRACK TAB */}
+          {/* TAB 3: DSA TRACK */}
           {activeTab === "dsa" && (
-            <div className="space-y-6">
-              <div className="border-b border-white/10 pb-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-purple-400">LeetCode Starter Track</span>
-                <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">First-Year Data Structures Progression</h2>
-              </div>
-
-              <div className="space-y-3">
-                {dsaTrack.map((track, idx) => (
-                  <div key={idx} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="size-8 rounded-lg bg-purple-500/20 text-purple-300 flex items-center justify-center font-bold text-xs">
-                        0{idx + 1}
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-bold text-white">{track.topic}</h4>
-                        <span className="text-xs text-gray-400">{track.count} • Difficulty: {track.difficulty}</span>
-                      </div>
+            <div className="space-y-4 max-w-2xl">
+              <h2 className="text-lg font-bold text-white">1st & 2nd Year DSA Progression</h2>
+              <div className="space-y-2">
+                {dsaTrack.map((t, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-3.5 rounded-2xl border border-white/10 bg-white/[0.02]">
+                    <div className="space-y-0.5">
+                      <strong className="text-xs sm:text-sm text-white block">{t.topic}</strong>
+                      <span className="text-[11px] text-gray-400">{t.count} • {t.difficulty}</span>
                     </div>
-                    <span className={`text-xs px-3 py-1 rounded-full font-semibold ${
-                      track.status === "Completed" ? "bg-emerald-500/20 text-emerald-300" : track.status === "In Progress" ? "bg-cyan-500/20 text-cyan-300" : "bg-white/10 text-gray-400"
-                    }`}>
-                      {track.status}
+                    <span className="text-xs px-2.5 py-1 rounded-lg font-semibold bg-white/5 text-gray-300">
+                      {t.status}
                     </span>
                   </div>
                 ))}
@@ -584,36 +577,44 @@ export default function RoadmapPage() {
             </div>
           )}
 
-          {/* 6. RESUME CHECKLIST TAB */}
-          {activeTab === "resume" && (
-            <div className="space-y-6">
-              <div className="border-b border-white/10 pb-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-purple-400">Career Readiness</span>
-                <h2 className="text-xl sm:text-2xl font-bold text-white mt-0.5">1st & 2nd Year Resume Readiness Checklist</h2>
-              </div>
+          {/* TAB 4: CERTIFICATIONS */}
+          {activeTab === "certs" && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {certifications.map((c, idx) => (
+                <div key={idx} className="rounded-3xl border border-white/10 bg-white/[0.02] p-5 space-y-3">
+                  <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded font-bold uppercase">
+                    {c.badge}
+                  </span>
+                  <h3 className="text-sm font-bold text-white">{c.title}</h3>
+                  <span className="text-xs text-gray-400 block">{c.provider} • {c.duration}</span>
+                  <p className="text-xs text-gray-400 leading-relaxed">{c.desc}</p>
+                </div>
+              ))}
+            </div>
+          )}
 
-              <div className="space-y-2 max-w-2xl">
+          {/* TAB 5: RESUME CHECKLIST */}
+          {activeTab === "resume" && (
+            <div className="space-y-4 max-w-2xl">
+              <h2 className="text-lg font-bold text-white">Engineering Resume Milestones</h2>
+              <div className="space-y-2">
                 {checklistState.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => toggleChecklist(item.id)}
-                    className={`p-4 rounded-xl border transition cursor-pointer flex items-center justify-between ${
-                      item.done
-                        ? "bg-emerald-500/10 border-emerald-500/30 text-white"
-                        : "bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.06]"
-                    }`}
+                    className="flex items-center gap-3 p-3.5 rounded-2xl border border-white/10 bg-white/[0.02] cursor-pointer hover:bg-white/[0.05] transition"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className={`size-5 rounded-md border flex items-center justify-center ${item.done ? "bg-emerald-500 border-emerald-400 text-white" : "border-gray-600"}`}>
-                        {item.done && <CheckCircle2 className="size-4" />}
-                      </div>
-                      <span className={`text-xs sm:text-sm ${item.done ? "line-through text-gray-400" : "font-medium text-white"}`}>
+                    <div className={`size-5 rounded-md flex items-center justify-center border ${
+                      item.done ? "bg-purple-600 border-purple-500 text-white" : "border-white/20"
+                    }`}>
+                      {item.done && <Check className="size-3.5" />}
+                    </div>
+                    <div className="flex-1">
+                      <span className={`text-xs sm:text-sm block ${item.done ? "line-through text-gray-500" : "text-white"}`}>
                         {item.title}
                       </span>
+                      <span className="text-[10px] text-gray-500">{item.phase}</span>
                     </div>
-                    <span className="text-[10px] bg-white/10 text-gray-300 px-2 py-0.5 rounded font-bold">
-                      {item.phase}
-                    </span>
                   </div>
                 ))}
               </div>
@@ -622,62 +623,69 @@ export default function RoadmapPage() {
         </div>
       </section>
 
-      {/* NODE DETAIL MODAL */}
+      {/* NODE INSPECTOR MODAL */}
       {selectedNode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="relative w-full max-w-lg rounded-2xl border border-purple-500/30 bg-[#0f111d] p-6 shadow-2xl space-y-4">
-            <button
-              onClick={() => setSelectedNode(null)}
-              className="absolute right-4 top-4 text-gray-400 hover:text-white"
-            >
-              <X className="size-5" />
-            </button>
-
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-purple-400">
-                Sem {selectedNode.sem} Node Inspection
-              </span>
-              <h3 className="text-xl font-bold text-white mt-1">{selectedNode.title}</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+          <div className="relative w-full max-w-lg rounded-3xl border border-purple-500/30 bg-[#0d0f18] p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-purple-400">
+                  Semester {selectedNode.sem} • {selectedNode.category}
+                </span>
+                <h3 className="text-base font-bold text-white">{selectedNode.title}</h3>
+              </div>
+              <button
+                onClick={() => setSelectedNode(null)}
+                className="text-gray-400 hover:text-white cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
             </div>
 
             <p className="text-xs text-gray-300 leading-relaxed">{selectedNode.desc}</p>
 
-            <div className="space-y-2 border-t border-white/10 pt-3">
-              <span className="text-xs font-semibold text-gray-300 block">Topics Covered in this Node:</span>
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-gray-400">Key Syllabus Topics:</span>
               <div className="flex flex-wrap gap-1.5">
                 {selectedNode.topics.map((t, idx) => (
-                  <span key={idx} className="text-xs bg-purple-500/20 text-purple-300 px-2.5 py-1 rounded border border-purple-500/30">
+                  <span key={idx} className="rounded-lg bg-white/[0.05] border border-white/10 px-2.5 py-1 text-xs text-gray-200">
                     {t}
                   </span>
                 ))}
               </div>
             </div>
 
-            <div className="pt-2 flex items-center justify-between">
-              <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-                <CheckCircle2 className="size-3.5" /> {selectedNode.resourceLink} Attached
-              </span>
+            {/* Progress Selector */}
+            <div className="space-y-2 pt-2 border-t border-white/10">
+              <span className="text-xs font-bold text-gray-400">Update Status:</span>
+              <div className="grid grid-cols-3 gap-2">
+                {(["completed", "in_progress", "locked"] as const).map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => updateNodeStatus(selectedNode, st)}
+                    className={`py-2 text-xs font-semibold rounded-xl border transition capitalize cursor-pointer ${
+                      selectedNode.status === st
+                        ? "bg-purple-600 border-purple-500 text-white"
+                        : "bg-white/[0.03] border-white/10 text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    {st.replace("_", " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-2">
               <button
                 onClick={() => setSelectedNode(null)}
-                className="px-4 py-2 rounded-xl bg-purple-600 text-xs font-bold text-white shadow-md shadow-purple-600/30 hover:bg-purple-500"
+                className="w-full py-2.5 bg-white/10 hover:bg-white/15 rounded-xl text-xs font-bold text-white transition cursor-pointer"
               >
-                Close Inspector
+                Close
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* FOOTER */}
-      <footer className="border-t border-white/10 bg-[#06070a] py-8 text-xs text-gray-500 relative z-10">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-white">CampusOS Roadmap Hub</span>
-            <span>• Inspired by roadmap.sh for Karnataka Engineers</span>
-          </div>
-          <div>© {new Date().getFullYear()} CampusOS Technologies</div>
-        </div>
-      </footer>
     </main>
   );
 }

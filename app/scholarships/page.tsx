@@ -1,14 +1,21 @@
+/**
+ * @file app/scholarships/page.tsx
+ * @description Scholarships & Government Grants Portal for CampusOS.
+ * @purpose Connects to /api/scholarships, manages bookmarking via /api/scholarships/bookmark, and loads document requirements.
+ */
+
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { Navbar } from "@/components/layout/navbar";
+import { ScholarshipWithBookmarkDTO, ScholarshipDTO } from "@/types/api.types";
 import {
   GraduationCap,
   Search,
   Clock,
   CheckCircle2,
   Sparkles,
-  Award,
   ExternalLink,
   Bell,
   BellCheck,
@@ -16,24 +23,48 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   X,
-  Heart,
-  FileText,
-  Briefcase
+  FileText
 } from "lucide-react";
 
 // Scholarship Category Tabs
 const categories = [
-  { id: "all", label: "All Scholarships", count: 24 },
-  { id: "government", label: "Government Grants", count: 10 },
-  { id: "private", label: "Private & Corporate", count: 8 },
-  { id: "women", label: "Women in Tech", count: 6 },
-  { id: "merit", label: "Merit-Based", count: 12 },
+  { id: "all", label: "All Scholarships" },
+  { id: "government", label: "Government Grants" },
+  { id: "private", label: "Private & Corporate" },
+  { id: "women", label: "Women in Tech" },
+  { id: "merit", label: "Merit-Based" },
 ];
 
-// Mock Karnataka & National Scholarships Data
-const scholarshipsData = [
+export interface ScholarshipItem {
+  id: string;
+  numericId?: number;
+  title: string;
+  provider: string;
+  logo: string;
+  type: string;
+  grantAmount: string;
+  annualValue: number;
+  deadline: string;
+  daysLeft: number;
+  isUrgent: boolean;
+  isWomenOnly: boolean;
+  eligibility: {
+    category: string[];
+    maxIncome: string;
+    minMarks: string;
+    degree: string;
+  };
+  tags: string[];
+  documentsRequired: string[];
+  portalUrl: string;
+  verifiedBySenior: boolean;
+}
+
+// Fallback Curated Karnataka & National Scholarships Data
+const defaultScholarships: ScholarshipItem[] = [
   {
-    id: "s1",
+    id: "1",
+    numericId: 1,
     title: "SSP Karnataka Post-Matric Scholarship (2025/26)",
     provider: "Government of Karnataka • Department of Technical Education",
     logo: "🏛️",
@@ -56,7 +87,8 @@ const scholarshipsData = [
     verifiedBySenior: true,
   },
   {
-    id: "s2",
+    id: "2",
+    numericId: 2,
     title: "Pragati Scholarship for Women in Engineering",
     provider: "AICTE • Ministry of Education, Govt of India",
     logo: "👩‍💻",
@@ -79,7 +111,8 @@ const scholarshipsData = [
     verifiedBySenior: true,
   },
   {
-    id: "s3",
+    id: "3",
+    numericId: 3,
     title: "Reliance Foundation Undergraduate Scholarship",
     provider: "Reliance Foundation",
     logo: "💎",
@@ -102,7 +135,8 @@ const scholarshipsData = [
     verifiedBySenior: true,
   },
   {
-    id: "s4",
+    id: "4",
+    numericId: 4,
     title: "Sitaram Jindal Foundation Engineering Grant",
     provider: "Sitaram Jindal Foundation • Bengaluru",
     logo: "🌿",
@@ -125,7 +159,8 @@ const scholarshipsData = [
     verifiedBySenior: true,
   },
   {
-    id: "s5",
+    id: "5",
+    numericId: 5,
     title: "Infosys STEM Women Fellowship 2026",
     provider: "Infosys Foundation",
     logo: "🏢",
@@ -148,7 +183,8 @@ const scholarshipsData = [
     verifiedBySenior: true,
   },
   {
-    id: "s6",
+    id: "6",
+    numericId: 6,
     title: "National Scholarship Portal (NSP) Central Sector Scheme",
     provider: "Ministry of Human Resource Development (MHRD)",
     logo: "🇮🇳",
@@ -173,55 +209,166 @@ const scholarshipsData = [
 ];
 
 export default function ScholarshipsPage() {
+  const [scholarships, setScholarships] = useState<ScholarshipItem[]>(defaultScholarships);
   const [activeCategory, setActiveCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
   // Filters State
-  const [typeFilter, setTypeFilter] = useState("all"); // all, government, private
+  const [typeFilter, setTypeFilter] = useState("all");
   const [womenOnlyFilter, setWomenOnlyFilter] = useState(false);
   const [urgentOnly, setUrgentOnly] = useState(false);
 
   // Application Tracker State
   const [trackedScholarships, setTrackedScholarships] = useState<{ [id: string]: "saved" | "applied" | "review" | "awarded" }>({
-    s1: "applied",
-    s2: "saved",
+    "1": "applied",
+    "2": "saved",
   });
 
   // Reminders State
-  const [reminders, setReminders] = useState<string[]>(["s1"]);
+  const [reminders, setReminders] = useState<string[]>(["1"]);
 
   // Toast / Modal State
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [selectedDocChecklist, setSelectedDocChecklist] = useState<typeof scholarshipsData[0] | null>(null);
+  const [selectedDocChecklist, setSelectedDocChecklist] = useState<ScholarshipItem | null>(null);
+  const [checklistDocs, setChecklistDocs] = useState<string[]>([]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const toggleReminder = (id: string, title: string) => {
-    if (reminders.includes(id)) {
-      setReminders(reminders.filter((r) => r !== id));
-      showToast(`Reminder removed for ${title}`);
+  // Fetch live scholarships from API on mount
+  useEffect(() => {
+    const fetchScholarships = async () => {
+      try {
+        const res = await fetch("/api/scholarships", { credentials: "include" });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            const liveItems: ScholarshipItem[] = json.data.map((item: ScholarshipWithBookmarkDTO) => {
+              const matchedDefault = defaultScholarships.find(
+                (d) => d.title.toLowerCase() === item.scholarshipName.toLowerCase() || d.id === String(item.scholarshipId)
+              );
+
+              return {
+                id: String(item.scholarshipId),
+                numericId: item.scholarshipId,
+                title: item.scholarshipName,
+                provider: matchedDefault?.provider || "Karnataka Technical Education",
+                logo: matchedDefault?.logo || "🎓",
+                type: matchedDefault?.type || "government",
+                grantAmount: matchedDefault?.grantAmount || "₹25,000 - ₹50,000 / year",
+                annualValue: matchedDefault?.annualValue || 35000,
+                deadline: item.deadline ? new Date(item.deadline).toLocaleDateString() : "Open",
+                daysLeft: matchedDefault?.daysLeft || 14,
+                isUrgent: matchedDefault?.isUrgent || false,
+                isWomenOnly: matchedDefault?.isWomenOnly || false,
+                eligibility: matchedDefault?.eligibility || {
+                  category: ["All Categories"],
+                  maxIncome: "Income guidelines apply",
+                  minMarks: "60% Marks",
+                  degree: "1st Year Engineering",
+                },
+                tags: matchedDefault?.tags || ["Grant", "Karnataka"],
+                documentsRequired: matchedDefault?.documentsRequired || ["Aadhaar Card", "Income Certificate"],
+                portalUrl: item.applicationUrl || matchedDefault?.portalUrl || "https://ssp.postmatric.karnataka.gov.in",
+                verifiedBySenior: true,
+              };
+            });
+
+            // Update tracked state for bookmarked scholarships
+            const newTracked: { [id: string]: "saved" | "applied" | "review" | "awarded" } = { ...trackedScholarships };
+            json.data.forEach((item: ScholarshipWithBookmarkDTO) => {
+              if (item.isBookmarked) {
+                newTracked[String(item.scholarshipId)] = "saved";
+              }
+            });
+            setTrackedScholarships(newTracked);
+            setScholarships(liveItems);
+          }
+        }
+      } catch {
+        // Fallback to default list
+      }
+    };
+
+    fetchScholarships();
+  }, []);
+
+  /**
+   * Toggles bookmark and calls /api/scholarships/bookmark
+   */
+  const toggleBookmark = async (id: string, numericId?: number) => {
+    const isSaved = trackedScholarships[id] === "saved";
+    const newStatus = isSaved ? undefined : "saved";
+
+    const updated = { ...trackedScholarships };
+    if (newStatus) {
+      updated[id] = newStatus;
     } else {
-      setReminders([...reminders, id]);
-      showToast(`🔔 Reminder set! We'll alert you 3 days before deadline for ${title}`);
+      delete updated[id];
+    }
+    setTrackedScholarships(updated);
+
+    const targetId = numericId || Number(id);
+    if (!isNaN(targetId) && targetId > 0) {
+      try {
+        if (!isSaved) {
+          await fetch("/api/scholarships/bookmark", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ scholarshipId: targetId }),
+          });
+          showToast("Saved to your scholarship tracker!");
+        } else {
+          await fetch(`/api/scholarships/bookmark?scholarshipId=${targetId}`, {
+            method: "DELETE",
+            credentials: "include",
+          });
+          showToast("Removed from tracker.");
+        }
+      } catch {
+        // Graceful silent fallback
+      }
     }
   };
 
-  const updateTrackStatus = (id: string, status: "saved" | "applied" | "review" | "awarded") => {
-    setTrackedScholarships({ ...trackedScholarships, [id]: status });
-    showToast(`Status updated to "${status.toUpperCase()}"`);
+  const toggleReminder = (id: string) => {
+    if (reminders.includes(id)) {
+      setReminders(reminders.filter((r) => r !== id));
+      showToast("Deadline reminder turned off.");
+    } else {
+      setReminders([...reminders, id]);
+      showToast("🔔 48h deadline reminder activated!");
+    }
+  };
+
+  const handleOpenDocModal = async (sch: ScholarshipItem) => {
+    setSelectedDocChecklist(sch);
+    setChecklistDocs(sch.documentsRequired);
+
+    if (sch.numericId) {
+      try {
+        const res = await fetch(`/api/scholarships/documents?scholarshipId=${sch.numericId}`, {
+          credentials: "include",
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            setChecklistDocs(json.data.map((d: { documentName?: string }) => d.documentName || "Document"));
+          }
+        }
+      } catch {
+        // Fallback to default docs
+      }
+    }
   };
 
   // Filter Logic
-  const filteredScholarships = scholarshipsData.filter((sch) => {
-    // Category Tabs
-    if (activeCategory === "government" && sch.type !== "government") return false;
-    if (activeCategory === "private" && sch.type !== "private") return false;
-    if (activeCategory === "women" && !sch.isWomenOnly) return false;
+  const filteredScholarships = scholarships.filter((sch) => {
+    if (activeCategory !== "all" && sch.type !== activeCategory) return false;
 
-    // Search Query
     if (
       searchQuery &&
       !sch.title.toLowerCase().includes(searchQuery.toLowerCase()) &&
@@ -231,460 +378,339 @@ export default function ScholarshipsPage() {
       return false;
     }
 
-    // Type Filter
     if (typeFilter !== "all" && sch.type !== typeFilter) return false;
-
-    // Women Only Switch
     if (womenOnlyFilter && !sch.isWomenOnly) return false;
-
-    // Urgent Only
     if (urgentOnly && !sch.isUrgent) return false;
 
     return true;
   });
 
-  // Tracker Counts
-  const trackerCounts = {
-    saved: Object.values(trackedScholarships).filter((s) => s === "saved").length,
-    applied: Object.values(trackedScholarships).filter((s) => s === "applied").length,
-    review: Object.values(trackedScholarships).filter((s) => s === "review").length,
-    awarded: Object.values(trackedScholarships).filter((s) => s === "awarded").length,
-  };
-
   return (
     <main className="min-h-screen bg-[#08090e] text-[#f3f4f6] selection:bg-purple-500/30 selection:text-purple-200">
-      {/* Ambient background glows */}
+      {/* Background glow mesh */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[500px] bg-radial-glow opacity-80" />
         <div className="absolute inset-0 bg-grid-pattern opacity-30" />
       </div>
 
-      {/* TOAST NOTIFICATION */}
+      {/* DYNAMIC HEADER NAVBAR */}
+      <Navbar />
+
+      {/* TOAST ALERT */}
       {toastMessage && (
-        <div className="fixed top-20 right-4 z-50 rounded-xl border border-purple-500/40 bg-[#0f111d] px-4 py-3 text-xs font-semibold text-white shadow-2xl flex items-center gap-2 animate-pulse-glow">
+        <div className="fixed bottom-6 right-6 z-50 rounded-2xl border border-purple-500/40 bg-[#0d0f18]/95 px-4 py-3 text-xs font-semibold text-white shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 flex items-center gap-2">
           <Sparkles className="size-4 text-purple-400" />
           <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* HEADER NAVBAR */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#08090e]/80 border-b border-white/10">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <Link href="/" className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 font-bold text-white shadow-lg shadow-purple-500/25">
-              CO
-            </Link>
-            <div className="flex flex-col">
-              <span className="text-sm font-bold tracking-tight text-white flex items-center gap-2">
-                CampusOS Scholarship Hub
-                <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400 border border-emerald-500/20">
-                  Karnataka State & Central
-                </span>
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Link
-              href="/opportunities"
-              className="text-xs text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 hidden sm:flex"
-            >
-              <Briefcase className="size-3.5" /> Opportunities
-            </Link>
-            <Link
-              href="/"
-              className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/[0.04] px-3.5 py-1.5 text-xs font-semibold text-gray-200 hover:bg-white/[0.08]"
-            >
-              Back to Workspace
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      {/* HERO & APPLICATION TRACKER SECTION */}
+      {/* HERO & SEARCH BAR */}
       <section className="relative z-10 pt-8 pb-6 border-b border-white/10 bg-white/[0.01]">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 space-y-6">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
             <div className="space-y-2">
               <span className="text-xs font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1.5">
                 <GraduationCap className="size-4" />
-                Student Financial Security Portal
+                Karnataka State & Corporate Grant Radar
               </span>
               <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
-                Never Miss a State, Central or Corporate Grant.
+                Scholarships & Financial Security.
               </h1>
               <p className="text-sm text-gray-400 max-w-2xl">
-                Verified scholarships for VTU & Autonomous engineering students across Karnataka. Filter by income slab, category, gender, and set deadline reminders.
+                Track SSP Karnataka, AICTE Pragati, Infosys, and Jindal grants with real-time deadline alarms and verified document checklists.
               </p>
             </div>
 
-            <div className="flex items-center gap-3 shrink-0">
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-center min-w-[110px]">
-                <span className="text-xl font-bold text-white block">₹4.5 Cr+</span>
-                <span className="text-[11px] text-emerald-300 block">Total Grant Pool</span>
-              </div>
-              <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 p-3 text-center min-w-[110px]">
-                <span className="text-xl font-bold text-white block">24 Grants</span>
-                <span className="text-[11px] text-purple-300 block">Verified Open</span>
-              </div>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/opportunities"
+                className="inline-flex items-center gap-2 rounded-xl bg-purple-500/10 border border-purple-500/20 px-3.5 py-2 text-xs font-bold text-purple-300 hover:bg-purple-500/20 transition"
+              >
+                <span>View Hackathons & Jobs</span>
+                <ExternalLink className="size-3.5" />
+              </Link>
             </div>
           </div>
 
-          {/* APPLICATION TRACKER KANBAN WIDGET */}
-          <div className="rounded-2xl border border-white/15 bg-black/60 p-4 backdrop-blur-xl space-y-3">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2">
-                <FileText className="size-4 text-purple-400" />
-                My Application Tracker
-              </span>
-              <span className="text-[11px] text-gray-400">Track application progress</span>
+          {/* SEARCH INPUT */}
+          <div className="relative w-full">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-gray-400">
+              <Search className="size-4" />
             </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 flex items-center justify-between">
-                <div>
-                  <span className="text-gray-400 block">Saved / Interested</span>
-                  <strong className="text-white text-lg font-bold">{trackerCounts.saved}</strong>
-                </div>
-                <Bookmark className="size-5 text-gray-400" />
-              </div>
-
-              <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 flex items-center justify-between">
-                <div>
-                  <span className="text-blue-300 block">Applied</span>
-                  <strong className="text-white text-lg font-bold">{trackerCounts.applied}</strong>
-                </div>
-                <CheckCircle2 className="size-5 text-blue-400" />
-              </div>
-
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between">
-                <div>
-                  <span className="text-amber-300 block">Under Review</span>
-                  <strong className="text-white text-lg font-bold">{trackerCounts.review}</strong>
-                </div>
-                <Clock className="size-5 text-amber-400" />
-              </div>
-
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 flex items-center justify-between">
-                <div>
-                  <span className="text-emerald-300 block">Awarded</span>
-                  <strong className="text-white text-lg font-bold">{trackerCounts.awarded}</strong>
-                </div>
-                <Award className="size-5 text-emerald-400" />
-              </div>
-            </div>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by scholarship name, provider (SSP, AICTE, Jindal, Infosys), or eligibility tag..."
+              className="w-full rounded-2xl border border-white/15 bg-black/60 py-3 pl-10 pr-4 text-sm text-white placeholder-gray-500 backdrop-blur-xl focus:border-purple-500 focus:outline-none transition"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-gray-400 hover:text-white"
+              >
+                <X className="size-4" />
+              </button>
+            )}
           </div>
 
-          {/* SEARCH BAR & CATEGORY TABS */}
-          <div className="space-y-4 pt-2">
-            <div className="relative max-w-2xl">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by scholarship title, provider (SSP, NSP, Infosys, Jindal, Reliance)..."
-                className="w-full rounded-2xl border border-white/15 bg-black/60 pl-11 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:outline-none"
-              />
-              {searchQuery && (
+          {/* CATEGORY TABS */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+            {categories.map((cat) => {
+              const isSelected = activeCategory === cat.id;
+              return (
                 <button
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                  key={cat.id}
+                  onClick={() => setActiveCategory(cat.id)}
+                  className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                    isSelected
+                      ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/30"
+                      : "bg-white/[0.04] text-gray-400 hover:bg-white/[0.08] hover:text-white border border-white/5"
+                  }`}
                 >
-                  <X className="size-4" />
+                  <span>{cat.label}</span>
                 </button>
-              )}
-            </div>
-
-            {/* Category Tabs */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-              {categories.map((cat) => {
-                const isActive = activeCategory === cat.id;
-                return (
-                  <button
-                    key={cat.id}
-                    onClick={() => setActiveCategory(cat.id)}
-                    className={`shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                      isActive
-                        ? "bg-purple-600 text-white shadow-md shadow-purple-600/30 border border-purple-400/30"
-                        : "bg-white/[0.04] text-gray-400 hover:bg-white/[0.08] hover:text-white border border-white/5"
-                    }`}
-                  >
-                    <span>{cat.label}</span>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                        isActive ? "bg-white/20 text-white" : "bg-white/10 text-gray-400"
-                      }`}
-                    >
-                      {cat.count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+              );
+            })}
           </div>
         </div>
       </section>
 
-      {/* MAIN CONTENT GRID & FILTERS */}
-      <section className="py-8 relative z-10">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-            {/* FILTER SIDEBAR (3 cols) */}
-            <aside className="lg:col-span-3 rounded-2xl border border-white/10 bg-white/[0.02] p-5 backdrop-blur-xl space-y-6">
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <SlidersHorizontal className="size-4 text-emerald-400" />
-                  Eligibility Filters
-                </span>
-              </div>
+      {/* SCHOLARSHIP FEED */}
+      <section className="relative z-10 py-8">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 space-y-6">
+          {/* FILTER CONTROLS BAR */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-3 backdrop-blur-md">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-gray-400 flex items-center gap-1.5 px-2">
+                <SlidersHorizontal className="size-3.5 text-emerald-400" />
+                Filters:
+              </span>
 
-              {/* Filter 1: Provider Type */}
-              <div className="space-y-2">
-                <label className="block text-xs font-bold text-gray-300">Grant Type</label>
-                <div className="grid grid-cols-2 gap-1.5 text-xs">
-                  {[
-                    { id: "all", label: "All Types" },
-                    { id: "government", label: "Government" },
-                    { id: "private", label: "Private/Trust" },
-                  ].map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => setTypeFilter(t.id)}
-                      className={`px-3 py-1.5 rounded-lg border text-left cursor-pointer transition ${
-                        typeFilter === t.id
-                          ? "bg-purple-500/20 border-purple-500 text-purple-300 font-semibold"
-                          : "bg-white/[0.03] border-white/5 text-gray-400 hover:bg-white/[0.06]"
-                      }`}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              {/* Type Filter */}
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="rounded-xl border border-white/10 bg-black/60 px-3 py-1.5 text-xs text-gray-300 focus:border-purple-500 focus:outline-none"
+              >
+                <option value="all">Grant Type: All</option>
+                <option value="government">Government Grants</option>
+                <option value="private">Private Trusts</option>
+                <option value="women">Women Fellowships</option>
+              </select>
 
-              {/* Filter 2: Women Specific */}
-              <div className="space-y-2 pt-2 border-t border-white/10">
-                <label className="flex items-center justify-between cursor-pointer text-xs">
-                  <span className="text-pink-300 font-bold flex items-center gap-1.5">
-                    <Heart className="size-3.5 fill-pink-400 text-pink-400" />
-                    Women in Tech Only
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={womenOnlyFilter}
-                    onChange={(e) => setWomenOnlyFilter(e.target.checked)}
-                    className="size-4 rounded accent-pink-500 cursor-pointer"
-                  />
-                </label>
-              </div>
+              {/* Women Only Toggle */}
+              <button
+                onClick={() => setWomenOnlyFilter(!womenOnlyFilter)}
+                className={`rounded-xl px-3 py-1.5 text-xs font-semibold border transition cursor-pointer ${
+                  womenOnlyFilter
+                    ? "bg-purple-500/20 border-purple-500/40 text-purple-300"
+                    : "bg-black/60 border-white/10 text-gray-400 hover:text-white"
+                }`}
+              >
+                👩‍💻 Women in Tech Only
+              </button>
 
-              {/* Filter 3: Urgent Deadline */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between cursor-pointer text-xs">
-                  <span className="text-amber-300 font-medium flex items-center gap-1.5">
-                    <Clock className="size-3.5 text-amber-400" />
-                    Closing Soon (&lt; 15 Days)
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={urgentOnly}
-                    onChange={(e) => setUrgentOnly(e.target.checked)}
-                    className="size-4 rounded accent-amber-500 cursor-pointer"
-                  />
-                </label>
-              </div>
-            </aside>
+              {/* Urgent Toggle */}
+              <button
+                onClick={() => setUrgentOnly(!urgentOnly)}
+                className={`rounded-xl px-3 py-1.5 text-xs font-semibold border transition cursor-pointer ${
+                  urgentOnly
+                    ? "bg-rose-500/20 border-rose-500/40 text-rose-300"
+                    : "bg-black/60 border-white/10 text-gray-400 hover:text-white"
+                }`}
+              >
+                ⏱️ Closing This Month
+              </button>
+            </div>
+          </div>
 
-            {/* SCHOLARSHIP CARDS LIST (9 cols) */}
-            <div className="lg:col-span-9 space-y-4">
-              <div className="flex items-center justify-between text-xs text-gray-400">
-                <span>
-                  Showing <strong className="text-white font-bold">{filteredScholarships.length}</strong> eligible grants
-                </span>
-                <span className="text-purple-400">100% Free Application Guidance</span>
-              </div>
+          {/* SCHOLARSHIP CARDS GRID */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {filteredScholarships.map((sch) => {
+              const isSaved = trackedScholarships[sch.id] === "saved";
+              const isReminderActive = reminders.includes(sch.id);
 
-              {filteredScholarships.map((sch) => {
-                const isReminderSet = reminders.includes(sch.id);
-                const currentTrackStatus = trackedScholarships[sch.id] || "none";
-
-                return (
-                  <div
-                    key={sch.id}
-                    className="group relative rounded-2xl border border-white/10 bg-white/[0.02] p-5 sm:p-6 backdrop-blur-md transition duration-200 hover:border-purple-500/40 hover:bg-white/[0.04] space-y-4"
-                  >
-                    {/* Card Top Row */}
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-start gap-3.5">
-                        <div className="size-11 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center text-xl shrink-0">
+              return (
+                <div
+                  key={sch.id}
+                  className="group relative rounded-3xl border border-white/10 bg-gradient-to-b from-[#10121d] to-[#0a0b12] p-5 shadow-xl hover:border-emerald-500/40 hover:shadow-emerald-500/10 transition-all flex flex-col justify-between"
+                >
+                  <div className="space-y-4">
+                    {/* Header Row */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="size-11 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center text-xl shadow-inner">
                           {sch.logo}
                         </div>
                         <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-bold text-purple-400">{sch.provider}</span>
-                            {sch.isWomenOnly && (
-                              <span className="inline-flex items-center gap-1 text-[10px] bg-pink-500/20 text-pink-300 border border-pink-500/30 px-2 py-0.5 rounded-full font-bold">
-                                <Heart className="size-3 fill-pink-400 text-pink-400" /> Women Only
-                              </span>
-                            )}
-                            {sch.verifiedBySenior && (
-                              <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
-                                <ShieldCheck className="size-3" /> Senior Verified
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="text-base sm:text-lg font-bold text-white mt-0.5 group-hover:text-purple-300 transition">
-                            {sch.title}
-                          </h3>
+                          <span className="text-xs font-bold text-gray-400 block truncate max-w-[180px]">
+                            {sch.provider}
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-medium">
+                            <ShieldCheck className="size-3" />
+                            Verified Portal
+                          </span>
                         </div>
                       </div>
 
-                      {/* Reminder Toggle Button */}
-                      <button
-                        onClick={() => toggleReminder(sch.id, sch.title)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition cursor-pointer shrink-0 ${
-                          isReminderSet
-                            ? "bg-amber-500/20 border-amber-500 text-amber-300"
-                            : "bg-white/[0.03] border-white/10 text-gray-400 hover:text-white hover:bg-white/[0.08]"
-                        }`}
-                      >
-                        {isReminderSet ? <BellCheck className="size-3.5 text-amber-400" /> : <Bell className="size-3.5" />}
-                        <span>{isReminderSet ? "Reminder Set" : "Set Reminder"}</span>
-                      </button>
-                    </div>
-
-                    {/* Eligibility Grid */}
-                    <div className="rounded-xl border border-white/10 bg-black/40 p-3.5 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                      <div>
-                        <span className="text-gray-400 block text-[11px]">Grant Amount</span>
-                        <strong className="text-emerald-400 font-bold">{sch.grantAmount}</strong>
-                      </div>
-                      <div>
-                        <span className="text-gray-400 block text-[11px]">Max Family Income</span>
-                        <strong className="text-white font-semibold">{sch.eligibility.maxIncome}</strong>
-                      </div>
-                      <div>
-                        <span className="text-gray-400 block text-[11px]">Academic Merit</span>
-                        <strong className="text-white font-semibold">{sch.eligibility.minMarks}</strong>
-                      </div>
-                      <div>
-                        <span className="text-gray-400 block text-[11px]">Deadline</span>
-                        <strong className={`font-bold ${sch.isUrgent ? "text-rose-400" : "text-amber-400"}`}>
-                          {sch.deadline} ({sch.daysLeft} days left)
-                        </strong>
-                      </div>
-                    </div>
-
-                    {/* Tags & Action Bar */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
-                      <div className="flex flex-wrap gap-1.5">
-                        {sch.tags.map((tag, tIdx) => (
-                          <span key={tIdx} className="text-[10px] bg-white/[0.05] border border-white/10 text-gray-300 px-2.5 py-0.5 rounded-full">
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        {/* Tracker Dropdown */}
-                        <select
-                          value={currentTrackStatus}
-                          onChange={(e) => updateTrackStatus(sch.id, e.target.value as "saved" | "applied" | "review" | "awarded")}
-                          className="bg-black/60 border border-white/15 rounded-xl px-2.5 py-1.5 text-xs text-gray-300 focus:outline-none"
-                        >
-                          <option value="none">Set Track Status...</option>
-                          <option value="saved">💾 Saved</option>
-                          <option value="applied">✅ Applied</option>
-                          <option value="review">⏳ Under Review</option>
-                          <option value="awarded">🎉 Awarded</option>
-                        </select>
-
+                      <div className="flex items-center gap-1">
                         <button
-                          onClick={() => setSelectedDocChecklist(sch)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-500/10 text-purple-300 border border-purple-500/20 text-xs font-semibold hover:bg-purple-500/20 cursor-pointer"
+                          onClick={() => toggleReminder(sch.id)}
+                          className={`p-2 rounded-xl border transition cursor-pointer ${
+                            isReminderActive
+                              ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
+                              : "bg-white/[0.03] border-white/10 text-gray-400 hover:text-white"
+                          }`}
                         >
-                          <FileText className="size-3.5" />
-                          Docs Checklist
+                          {isReminderActive ? <BellCheck className="size-4" /> : <Bell className="size-4" />}
                         </button>
-
-                        <a
-                          href={sch.portalUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-xs font-semibold text-white shadow-md shadow-purple-600/30 hover:from-purple-500 hover:to-indigo-500 transition"
+                        <button
+                          onClick={() => toggleBookmark(sch.id, sch.numericId)}
+                          className={`p-2 rounded-xl border transition cursor-pointer ${
+                            isSaved
+                              ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300"
+                              : "bg-white/[0.03] border-white/10 text-gray-400 hover:text-white"
+                          }`}
                         >
-                          <span>Apply Official</span>
-                          <ExternalLink className="size-3.5" />
-                        </a>
+                          <Bookmark className="size-4" />
+                        </button>
                       </div>
+                    </div>
+
+                    {/* Title & Amount */}
+                    <div className="space-y-1.5">
+                      <h2 className="text-base font-bold text-white group-hover:text-emerald-300 transition line-clamp-1">
+                        {sch.title}
+                      </h2>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-extrabold text-emerald-400">{sch.grantAmount}</span>
+                        {sch.isUrgent && (
+                          <span className="text-[10px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">
+                            Closing Soon
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Eligibility & Info Matrix */}
+                    <div className="space-y-2 rounded-2xl bg-white/[0.02] border border-white/5 p-3 text-xs text-gray-300">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Max Family Income:</span>
+                        <strong className="text-white">{sch.eligibility.maxIncome}</strong>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Academic Cutoff:</span>
+                        <strong className="text-white">{sch.eligibility.minMarks}</strong>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">Target Cohort:</span>
+                        <strong className="text-purple-300">{sch.eligibility.degree}</strong>
+                      </div>
+                      <div className="flex items-center justify-between border-t border-white/5 pt-1.5">
+                        <span className="text-gray-500">Deadline:</span>
+                        <span className="text-amber-400 font-semibold flex items-center gap-1">
+                          <Clock className="size-3" />
+                          {sch.deadline}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Tags */}
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {sch.tags.map((tag, idx) => (
+                        <span
+                          key={idx}
+                          className="rounded-lg bg-white/[0.04] border border-white/5 px-2 py-0.5 text-[10px] text-gray-300 font-medium"
+                        >
+                          {tag}
+                        </span>
+                      ))}
                     </div>
                   </div>
-                );
-              })}
-            </div>
+
+                  {/* Actions Bottom Bar */}
+                  <div className="pt-4 mt-4 border-t border-white/10 flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => handleOpenDocModal(sch)}
+                      className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-white transition cursor-pointer"
+                    >
+                      <FileText className="size-3.5 text-emerald-400" />
+                      <span>Document Checklist</span>
+                    </button>
+
+                    <a
+                      href={sch.portalUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-md shadow-emerald-600/30 hover:from-emerald-500 hover:to-teal-500 transition"
+                    >
+                      <span>Official Portal</span>
+                      <ExternalLink className="size-3" />
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
 
       {/* DOCUMENT CHECKLIST MODAL */}
       {selectedDocChecklist && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="relative w-full max-w-md rounded-2xl border border-purple-500/30 bg-[#0f111d] p-6 shadow-2xl space-y-4">
-            <button
-              onClick={() => setSelectedDocChecklist(null)}
-              className="absolute right-4 top-4 text-gray-400 hover:text-white"
-            >
-              <X className="size-5" />
-            </button>
-
-            <div className="flex items-center gap-3">
-              <div className="size-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center text-xl">
-                {selectedDocChecklist.logo}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+          <div className="relative w-full max-w-lg rounded-3xl border border-emerald-500/30 bg-[#0d0f18] p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <FileText className="size-5 text-emerald-400" />
+                <h3 className="text-sm font-bold text-white">Document Checklist</h3>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-white">{selectedDocChecklist.title}</h3>
-                <p className="text-xs text-purple-400">{selectedDocChecklist.provider}</p>
-              </div>
+              <button
+                onClick={() => setSelectedDocChecklist(null)}
+                className="text-gray-400 hover:text-white cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
             </div>
 
-            <div className="space-y-2 border-t border-white/10 pt-3">
-              <span className="text-xs font-bold text-white uppercase tracking-wider block">
-                Required Document Checklist
-              </span>
-              <div className="space-y-1.5">
-                {selectedDocChecklist.documentsRequired.map((doc, dIdx) => (
-                  <div key={dIdx} className="flex items-center gap-2 text-xs text-gray-300 p-2 rounded-lg bg-white/[0.03] border border-white/5">
-                    <CheckCircle2 className="size-4 text-emerald-400 shrink-0" />
-                    <span>{doc}</span>
-                  </div>
-                ))}
-              </div>
+            <div className="space-y-1">
+              <span className="text-xs font-bold text-emerald-300 block">{selectedDocChecklist.title}</span>
+              <p className="text-xs text-gray-400">
+                Keep the following attested documents ready before opening the application portal:
+              </p>
             </div>
 
-            <a
-              href={selectedDocChecklist.portalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full flex h-10 items-center justify-center gap-2 rounded-xl bg-purple-600 text-xs font-bold text-white shadow-md shadow-purple-600/30 hover:bg-purple-500"
-            >
-              Open Official Portal Application
-              <ExternalLink className="size-4" />
-            </a>
+            <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+              {checklistDocs.map((doc, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-3 p-3 rounded-2xl border border-white/10 bg-white/[0.02]"
+                >
+                  <CheckCircle2 className="size-4 text-emerald-400 shrink-0" />
+                  <span className="text-xs text-gray-200 font-medium">{doc}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-2 flex items-center gap-3">
+              <button
+                onClick={() => setSelectedDocChecklist(null)}
+                className="flex-1 py-2.5 bg-white/10 hover:bg-white/15 rounded-xl text-xs font-bold text-white transition cursor-pointer"
+              >
+                Close
+              </button>
+              <a
+                href={selectedDocChecklist.portalUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-center rounded-xl text-xs font-bold text-white shadow-lg transition"
+              >
+                Launch Portal
+              </a>
+            </div>
           </div>
         </div>
       )}
-
-      {/* FOOTER */}
-      <footer className="border-t border-white/10 bg-[#06070a] py-8 text-xs text-gray-500 relative z-10">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-white">CampusOS Scholarship Hub</span>
-            <span>• 100% Free Financial Guidance for Karnataka Students</span>
-          </div>
-          <div>© {new Date().getFullYear()} CampusOS Technologies</div>
-        </div>
-      </footer>
     </main>
   );
 }
